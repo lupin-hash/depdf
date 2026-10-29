@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+/build/
+/app/build/
+.DS_Store
+/PDFCleaner-debug.apk
+*.apk
+*.aab
+*.keystore
+*.jks

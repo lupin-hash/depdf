@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DePDF</title>
+<meta name="description" content="Clean and unlock PDFs privately on your device before data extraction.">
+<meta name="theme-color" content="#f4f5fa">
+<script>try{var s=JSON.parse(localStorage.getItem("pdfcleaner.settings.v1")||"{}"),t=s.theme||"system";if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
+<meta name="color-scheme" content="light dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="DePDF">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- Icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M5 20h14"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12.5l9 5 9-5"/><path d="M3 17l9 5 9-5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l10 17.5H2z"/><path d="M12 10v5"/><path d="M12 18v.2"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4v5h5"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10"/><path d="M18 6h2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h2"/><path d="M10 12h10"/><circle cx="8" cy="12" r="2"/><path d="M4 18h10"/><path d="M18 18h2"/><circle cx="16" cy="18" r="2"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+  </defs>
+</svg>
+
+<!-- Boot screen (first launch loads the PDF engine, later launches are instant & offline) -->
+<div id="boot" role="status" aria-live="polite">
+  <div class="boot-card">
+    <img src="icons/icon-192.png" alt="" width="84" height="84">
+    <h1>DePDF</h1>
+    <p id="boot-stage">Starting…</p>
+    <div class="bar"><i id="boot-bar"></i></div>
+    <p class="boot-note" id="boot-note">First launch loads the PDF engine (~30&nbsp;MB).</p>
+    <button class="btn primary" id="boot-retry" hidden>Try again</button>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <header class="top">
+    <img class="logo" src="icons/icon-192.png" alt="" width="44" height="44">
+    <div class="titles">
+      <h1>DePDF</h1>
+      <p>for data extraction</p>
+    </div>
+    <span class="pill" id="pill" title="All processing happens on this device"><svg class="ic"><use href="#i-shield"/></svg><span id="pill-text">On&#8209;device</span></span>
+  </header>
+
+  <div class="subbar">
+    <button class="icon-btn" id="back-btn" type="button" aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
+    <h2 id="sub-title"></h2>
+  </div>
+
+  <button class="upd-banner" id="upd-top" type="button" hidden>
+    <svg class="ic"><use href="#i-download"/></svg>
+    <span class="t"><b id="upd-top-title">Update available</b><small>Tap to see what's new</small></span>
+    <svg class="ic go"><use href="#i-chevron"/></svg>
+  </button>
+
+  <section id="view-home" class="home">
+    <nav class="menu" aria-label="Main menu">
+      <button class="menu-btn" id="m-upload" type="button"><span class="mi"><svg class="ic"><use href="#i-upload"/></svg></span><span class="mt"><b>Upload a PDF</b><small>Clean or unlock one file</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="menu-btn" id="m-batch" type="button"><span class="mi"><svg class="ic"><use href="#i-layers"/></svg></span><span class="mt"><b>Batch Upload</b><small>Clean many files at once</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="menu-btn" id="m-settings" type="button"><span class="mi"><svg class="ic"><use href="#i-sliders"/></svg></span><span class="mt"><b>Settings</b><small>Theme, updates, disclaimer</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+    </nav>
+  </section>
+
+  <section id="view-upload" hidden>
+  <main class="grid">
+    <!-- LEFT: file + preview -->
+    <div class="col col-left">
+      <section class="card" id="card-file" aria-labelledby="h-file">
+        <div class="card-head"><span class="num">1</span><h2 id="h-file">Choose the PDF</h2></div>
+
+        <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+        <input type="file" id="batch-input" accept="application/pdf,.pdf" multiple hidden>
+
+        <button class="drop" id="drop" type="button">
+          <span class="drop-ic"><svg class="ic lg"><use href="#i-upload"/></svg></span>
+          <span class="drop-t" id="drop-title">Tap to choose a PDF</span>
+          <span class="drop-s" id="drop-sub">or drop one here</span>
+        </button>
+
+        <div class="filechip" id="filechip" hidden>
+          <span class="fic"><svg class="ic"><use href="#i-file"/></svg></span>
+          <span class="fmeta"><b id="fname">—</b><small id="fsub">—</small></span>
+          <span class="lockbadge" id="lockbadge" hidden><svg class="ic"><use href="#i-lock"/></svg>Protected</span>
+          <button class="icon-btn" id="change-file" type="button" aria-label="Choose a different PDF"><svg class="ic"><use href="#i-reset"/></svg></button>
+        </div>
+
+        <div class="field">
+          <label for="out-name">Output PDF</label>
+          <input id="out-name" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="original_clean.pdf">
+        </div>
+
+        <div class="field">
+          <label for="password">PDF password <span class="opt">optional</span></label>
+          <div class="inputwrap">
+            <input id="password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Only if protected">
+            <button class="icon-btn" id="pw-toggle" type="button" aria-label="Show password" aria-pressed="false"><svg class="ic"><use href="#i-eye"/></svg></button>
+          </div>
+          <p class="hint">Output has no password.</p>
+        </div>
+
+        <div class="note big-note" id="big-note" role="note" hidden>
+          <svg class="ic"><use href="#i-layers"/></svg>
+          <p id="big-note-text"></p>
+        </div>
+      </section>
+
+      <section class="card" id="card-preview" aria-label="PDF viewer" hidden>
+        <div class="vtop">
+          <button class="icon-btn" id="viewer-back" type="button" aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
+          <div class="vt"><b id="vt-name">PDF</b><small id="pg-label">Page 1</small></div>
+          <div class="seg" id="seg-src" role="tablist" aria-label="Preview source">
+            <button type="button" role="tab" data-src="orig" aria-selected="true">Original</button>
+            <button type="button" role="tab" data-src="clean" aria-selected="false" disabled>Cleaned</button>
+          </div>
+        </div>
+        <div class="stage" id="stage">
+          <div class="pagebox" id="pagebox">
+            <img id="prev-img" alt="Page preview" draggable="false" hidden>
+            <div class="overlay" id="overlay" aria-hidden="true"></div>
+            <div class="hf" id="hf" hidden>
+              <div class="hf-handle t" id="hf-t" aria-label="Header size"><span class="hf-pill"><span><svg class="ic"><use href="#i-chevron"/></svg></span><span><svg class="ic"><use href="#i-chevron"/></svg></span></span></div>
+              <div class="hf-handle f" id="hf-f" aria-label="Footer size"><span class="hf-pill"><span><svg class="ic" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg></span><span><svg class="ic" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg></span></span></div>
+            </div>
+          </div>
+          <div class="stage-msg" id="stage-msg"></div>
+          <button class="vnav prev" id="pg-prev" type="button" aria-label="Previous page" disabled><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
+          <button class="vnav next" id="pg-next" type="button" aria-label="Next page" disabled><svg class="ic" style="transform:rotate(-90deg)"><use href="#i-chevron"/></svg></button>
+        </div>
+        <button class="viewer-hint" id="prev-hint" type="button"></button>
+        <button class="v-analyze" id="v-analyze" type="button"><svg class="ic"><use href="#i-search"/></svg><span>Analyze</span></button>
+        <button class="bubble" id="bubble" type="button" aria-label="Cleaning options"><svg class="ic"><use href="#i-eraser"/></svg><svg class="art art-eraser" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="eb-clip"><rect x="6" y="14" width="60" height="28" rx="7"/></clipPath></defs><g transform="rotate(-22 36 28)"><rect x="6" y="17" width="60" height="28" rx="7" fill="#000" opacity=".15"/><g clip-path="url(#eb-clip)"><rect x="6" y="14" width="60" height="28" fill="#f06a98"/><rect x="6" y="34" width="60" height="8" fill="#d8467c"/><rect x="38" y="14" width="30" height="28" fill="#2f5fd0"/><rect x="38" y="14" width="30" height="8" fill="#4b7be8"/><rect x="36" y="14" width="3" height="28" fill="#fff"/><rect x="50" y="14" width="2" height="28" fill="#fff" opacity=".7"/></g><rect x="6" y="14" width="60" height="28" rx="7" fill="none" stroke="#2b2b33" stroke-opacity=".35" stroke-width="1.5"/><path d="M12 20h18" stroke="#fff" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/></g><circle cx="12" cy="50" r="2" fill="#e0457b"/><circle cx="20" cy="53" r="1.5" fill="#6b7280"/><circle cx="5" cy="46" r="1.5" fill="#6b7280"/></svg><svg class="art art-sponge" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="sp-clip"><rect x="8" y="14" width="56" height="30" rx="9"/></clipPath></defs><g transform="rotate(-10 36 29)"><rect x="8" y="17" width="56" height="30" rx="9" fill="#000" opacity=".15"/><g clip-path="url(#sp-clip)"><rect x="8" y="14" width="56" height="30" fill="#f7d54d"/><rect x="8" y="34" width="56" height="10" fill="#34a56a"/><rect x="8" y="33" width="56" height="2" fill="#2a8a58"/><ellipse cx="18" cy="21" rx="3.2" ry="2.4" fill="#e2b72a"/><ellipse cx="30" cy="27" rx="2.4" ry="1.8" fill="#e2b72a"/><ellipse cx="42" cy="20" rx="3.6" ry="2.6" fill="#e2b72a"/><ellipse cx="54" cy="26" rx="3" ry="2.2" fill="#e2b72a"/><ellipse cx="24" cy="30" rx="1.8" ry="1.4" fill="#e2b72a"/><ellipse cx="48" cy="30" rx="2" ry="1.5" fill="#e2b72a"/><circle cx="16" cy="39" r="1" fill="#278a56"/><circle cx="27" cy="41" r="1" fill="#278a56"/><circle cx="38" cy="38" r="1" fill="#278a56"/><circle cx="49" cy="41" r="1" fill="#278a56"/><circle cx="58" cy="38" r="1" fill="#278a56"/></g><rect x="8" y="14" width="56" height="30" rx="9" fill="none" stroke="#6b5b0f" stroke-opacity=".35" stroke-width="1.5"/><path d="M15 20h16" stroke="#fff" stroke-opacity=".6" stroke-width="3" stroke-linecap="round"/></g></svg></button>
+      </section>
+    </div>
+
+    <!-- RIGHT: settings + results -->
+    <div class="col col-right">
+      <section class="card" id="card-results" aria-labelledby="h-res">
+        <div class="card-head">
+          <h2 id="h-res">Analysis / results</h2>
+          <button class="btn ghost sm" id="copy-report" type="button"><svg class="ic"><use href="#i-copy"/></svg><span>Copy</span></button>
+        </div>
+        <div id="outputs" class="outputs" hidden></div>
+        <pre id="report" tabindex="0">Choose a PDF, then tap Analyze.</pre>
+        <div id="xref-chips" class="chips" hidden></div>
+      </section>
+    </div>
+  </main>
+  </section>
+
+  <section id="view-settings" hidden>
+    <div class="settings">
+      <section class="card" aria-labelledby="h-theme">
+        <div class="card-head"><h2 id="h-theme">Theme</h2></div>
+        <div class="theme-list" id="theme-list" role="radiogroup" aria-label="Theme"></div>
+        <h3 class="sub-h">Accent color</h3>
+        <div class="accent-list" id="accent-list" role="radiogroup" aria-label="Accent color"></div>
+      </section>
+
+        <section class="card" id="card-update" aria-labelledby="h-upd" hidden>
+        <div class="card-head"><h2 id="h-upd">App updates</h2><span class="ver" id="app-ver"></span></div>
+        <p class="hint" id="upd-status">Check for a newer version.</p>
+        <div class="upd-actions">
+          <button class="btn ghost" id="upd-check" type="button"><svg class="ic"><use href="#i-reset"/></svg><span id="upd-check-label">Check for updates</span></button>
+          <button class="btn primary" id="upd-get" type="button" hidden><svg class="ic"><use href="#i-download"/></svg><span id="upd-get-label">Update available</span></button>
+        </div>
+        <p class="hint upd-notes" id="upd-notes" hidden></p>
+        <div class="switches"><label class="switch"><input type="checkbox" id="opt-autoupd"><span class="track"></span><span class="txt"><b>Check automatically</b><small>Once a day. Off by default.</small></span></label></div>
+        <p class="hint">Only the update check uses the internet. It sends none of your files or data.</p>
+      </section>
+
+      <button class="row-btn" id="open-disclaimer" type="button"><svg class="ic"><use href="#i-alert"/></svg><span>Disclaimer</span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+
+      <div class="reset-row"><button class="btn ghost sm" id="reset-btn" type="button"><svg class="ic"><use href="#i-reset"/></svg><span>Reset settings</span></button></div>
+    </div>
+  </section>
+</div>
+
+<!-- Action bar -->
+<nav class="actionbar" id="actionbar" aria-label="Actions" hidden>
+  <div class="statusline" id="statusline">
+    <span id="status" aria-live="polite">Ready</span>
+    <div class="bar indet" id="busybar" hidden><i></i></div>
+  </div>
+  <div class="actions">
+    <button class="act" id="btn-analyze" type="button"><svg class="ic"><use href="#i-search"/></svg><span>Analyze</span></button>
+    <button class="act main" id="btn-clean" type="button"><svg class="ic"><use href="#i-sparkles"/></svg><span>Clean PDF</span></button>
+    <button class="act" id="btn-batch" type="button"><svg class="ic"><use href="#i-layers"/></svg><span>Batch</span></button>
+    <button class="act" id="btn-unlock" type="button"><svg class="ic"><use href="#i-unlock"/></svg><span>Unlock</span></button>
+  </div>
+</nav>
+
+<!-- Processing overlay -->
+<div id="busy" class="busy" role="alertdialog" aria-modal="true" aria-labelledby="busy-title" aria-describedby="busy-detail" hidden>
+  <div class="busy-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2 id="busy-title">Working…</h2>
+    <p class="busy-detail" id="busy-detail" aria-live="polite">Starting…</p>
+    <div class="bar indet" id="busy-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i id="busy-prog-fill"></i></div>
+    <p class="busy-meta"><span id="busy-pct"></span><span id="busy-eta"></span><span id="busy-elapsed">0:00</span></p>
+    <div class="busy-note" id="busy-note" hidden>
+      <svg class="ic"><use href="#i-alert"/></svg>
+      <p id="busy-note-text"></p>
+    </div>
+    <p class="busy-tip">Keep the app open.</p>
+    <button class="btn ghost" id="busy-cancel" type="button" hidden>Cancel</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-password" role="dialog" aria-modal="true" aria-labelledby="mp-title" hidden>
+  <div class="modal-card">
+    <h2 id="mp-title">Password needed</h2>
+    <p class="mp-file" id="mp-file"></p>
+    <div class="inputwrap">
+      <input id="mp-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Password">
+      <button class="icon-btn" id="mp-toggle" type="button" aria-label="Show password"><svg class="ic"><use href="#i-eye"/></svg></button>
+    </div>
+    <p class="perr" id="mp-err" role="alert"></p>
+    <div class="modal-actions"><button class="btn ghost" id="mp-cancel" type="button">Cancel</button><button class="btn primary" id="mp-ok" type="button">Open</button></div>
+  </div>
+</div>
+
+<div class="modal" id="modal-analysis" role="dialog" aria-modal="true" aria-labelledby="ma-title" hidden>
+  <div class="modal-card wide">
+    <h2 id="ma-title">Analysis</h2>
+    <pre class="an-report" id="an-report" tabindex="0"></pre>
+    <div id="an-chips-slot"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="an-copy" type="button"><svg class="ic"><use href="#i-copy"/></svg><span>Copy</span></button>
+      <button class="btn ghost" type="button" data-close>Close</button>
+      <button class="btn primary" id="an-clean" type="button"><svg class="ic"><use href="#i-sparkles"/></svg><span>Clean PDF</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-name" role="dialog" aria-modal="true" aria-labelledby="mn-title" hidden>
+  <div class="modal-card">
+    <h2 id="mn-title">Name your copy</h2>
+    <div class="field">
+      <label for="nm-suffix">Add to name</label>
+      <input id="nm-suffix" type="text" value="_clean" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <p class="hint">Saves as <b id="nm-preview"></b></p>
+    <div class="modal-actions">
+      <button class="btn ghost" type="button" data-close>Cancel</button>
+      <button class="btn primary" id="nm-save" type="button"><svg class="ic"><use href="#i-download"/></svg><span>Save</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal sheet-modal" id="modal-opts" role="dialog" aria-modal="true" aria-labelledby="mo-title" hidden>
+  <div class="modal-card sheet">
+    <div class="sheet-head"><h2 id="mo-title">Cleaning options</h2><button class="btn ghost sm" type="button" data-close>Done</button></div>
+    <div class="sheet-body opt-list" id="opts-body">
+      <button class="opt-row" id="o-hf" type="button"><span class="oi"><svg class="ic"><use href="#i-sliders"/></svg></span><span class="ot"><b>Headers and footers</b><small id="o-hf-s"></small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="opt-row" id="draw-btn" type="button"><span class="oi"><svg class="ic"><use href="#i-crop"/></svg></span><span class="ot"><b>Draw area</b><small id="draw-state"></small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="opt-row" id="o-text" type="button"><span class="oi"><svg class="ic"><use href="#i-file"/></svg></span><span class="ot"><b>Headers and footers text</b><small id="o-text-s"></small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="opt-row" id="o-wm" type="button"><span class="oi"><svg class="ic"><use href="#i-layers"/></svg></span><span class="ot"><b>Watermarks</b><small id="o-wm-s"></small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="opt-row" id="o-other" type="button"><span class="oi"><svg class="ic"><use href="#i-sparkles"/></svg></span><span class="ot"><b>Others</b><small id="o-other-s"></small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <p class="hint">Bands and areas erase everything inside. Check the result.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="opt-unlock" type="button"><svg class="ic"><use href="#i-unlock"/></svg><span>Unlock only</span></button>
+      <button class="btn primary" id="opt-clean" type="button"><svg class="ic"><use href="#i-sparkles"/></svg><span>Clean PDF</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-hf" role="dialog" aria-modal="true" aria-labelledby="mhf-title" hidden>
+  <div class="modal-card">
+    <h2 id="mhf-title">Header and footer size</h2>
+    <div class="field">
+      <label for="top">Header <span class="opt">% from top</span></label>
+      <div class="num-input"><input id="top-range" type="range" min="0" max="25" step="0.5" aria-label="Header percent"><input id="top" type="text" inputmode="decimal" autocomplete="off" aria-describedby="band-hint"></div>
+    </div>
+    <div class="field">
+      <label for="bottom">Footer <span class="opt">% from bottom</span></label>
+      <div class="num-input"><input id="bottom-range" type="range" min="0" max="25" step="0.5" aria-label="Footer percent"><input id="bottom" type="text" inputmode="decimal" autocomplete="off" aria-describedby="band-hint"></div>
+    </div>
+    <p class="hint" id="band-hint">8 = top or bottom 8% of each page.</p>
+    <div class="modal-actions"><button class="btn ghost" id="hf-hide" type="button">Hide bars</button><button class="btn primary" type="button" data-close>Done</button></div>
+  </div>
+</div>
+
+<div class="modal" id="modal-areas" role="dialog" aria-modal="true" aria-labelledby="mar-title" hidden>
+  <div class="modal-card">
+    <h2 id="mar-title">Custom areas</h2>
+    <div class="field">
+      <label for="regions">Areas <span class="opt">x0,y0,x1,y1 in %</span></label>
+      <input id="regions" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="10,20,90,40; 0,92,100,100">
+    </div>
+    <p class="hint">Separate areas with ; or draw them.</p>
+    <div class="modal-actions"><button class="btn ghost" id="ar-clear" type="button">Clear</button><button class="btn ghost" id="ar-draw" type="button">Draw</button><button class="btn primary" type="button" data-close>Done</button></div>
+  </div>
+</div>
+
+<div class="modal" id="modal-text" role="dialog" aria-modal="true" aria-labelledby="mt-title" hidden>
+  <div class="modal-card">
+    <h2 id="mt-title">Headers and footers text</h2>
+    <div class="field"><label for="header-text">Header text <span class="opt">top 25%</span></label><input id="header-text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div class="field"><label for="footer-text">Footer text <span class="opt">bottom 25%</span></label><input id="footer-text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <p class="hint">Paste the text. Similar text matches too. Separate with ;.</p>
+    <button class="btn primary" type="button" data-close>Done</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-wm" role="dialog" aria-modal="true" aria-labelledby="mw-title" hidden>
+  <div class="modal-card">
+    <h2 id="mw-title">Watermarks</h2>
+    <div class="field">
+      <label for="watermark">Text phrases <span class="opt">separate with ;</span></label>
+      <input id="watermark" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="CONFIDENTIAL; DRAFT COPY">
+      <p class="hint">Risky overlapping matches are skipped to protect text.</p>
+    </div>
+    <label class="switch"><input type="checkbox" id="img-wm" checked><span class="track"></span><span class="txt"><b>Remove image watermarks</b><small>Large, faint images</small></span></label>
+    <div class="field">
+      <label for="xrefs">Image IDs <span class="opt">optional, use ;</span></label>
+      <input id="xrefs" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. 21; 34">
+      <p class="hint warn">Use IDs from Analyze. A shared image is removed everywhere.</p>
+    </div>
+    <button class="btn primary" type="button" data-close>Done</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-other" role="dialog" aria-modal="true" aria-labelledby="mx-title" hidden>
+  <div class="modal-card">
+    <h2 id="mx-title">Others</h2>
+    <div class="switches">
+      <label class="switch"><input type="checkbox" id="opt-meta" checked><span class="track"></span><span class="txt"><b>Remove metadata</b><small>Recommended</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-annots"><span class="track"></span><span class="txt"><b>Remove annotations</b><small>Comments and stamps</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-links"><span class="track"></span><span class="txt"><b>Remove hyperlinks</b><small>Page links</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-extras"><span class="track"></span><span class="txt"><b>Remove attachments &amp; scripts</b><small>Embedded files</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-hidden"><span class="track"></span><span class="txt"><b>Remove hidden / tracker text</b><small>Invisible, tiny or off-page. OCR kept.</small></span></label>
+    </div>
+    <button class="btn primary" type="button" data-close>Done</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-confirm" role="alertdialog" aria-modal="true" aria-labelledby="mc-title" hidden>
+  <div class="modal-card">
+    <h2 id="mc-title"></h2>
+    <p id="mc-text"></p>
+    <div class="modal-actions"><button class="btn ghost" id="mc-cancel" type="button">Cancel</button><button class="btn primary" id="mc-ok" type="button">Continue</button></div>
+  </div>
+</div>
+
+<div class="modal" id="modal-disclaimer" role="dialog" aria-modal="true" aria-labelledby="md-title" hidden>
+  <div class="modal-card">
+    <h2 id="md-title">Disclaimer</h2>
+    <p>Use this app responsibly. Only clean PDFs you own or may change. Hidden text and watermarks can exist for legal or security reasons, and detection isn't perfect, so always check the result.</p>
+    <p>The app is provided &ldquo;as is&rdquo;. The developer is not responsible or liable for how you use it, for lost data or damaged documents, or for any consequences of removing content.</p>
+    <button class="btn primary" type="button" data-close>OK</button>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
