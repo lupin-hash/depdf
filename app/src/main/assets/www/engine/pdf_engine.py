@@ -1331,33 +1331,42 @@ def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float 
 
 
 def page_text_lines(path: str, password: str = "", page_index: int = 0) -> str:
-    """Text lines of one page as JSON: {"lines": [[x0, y0, x1, y1, text], ...]} in 0..1 page fractions.
-    Used to lay copyable text over the preview image."""
+    """Text of one page as JSON for the copyable layer over the preview:
+    {"lines": [[x0, y0, x1, y1, [[wx0, wy0, wx1, wy1, "word"], ...]], ...]} in 0..1 page fractions,
+    in the orientation the page is rendered."""
     doc = _preview_doc(path, password)
     page_index = max(0, min(int(page_index), len(doc) - 1))
     page = doc[page_index]
-    rect = page.rect
+    rect, rot = page.rect, page.rotation_matrix
     w, h = max(rect.width, 1.0), max(rect.height, 1.0)
     groups, order = {}, []
     for x0, y0, x1, y1, word, block, line, _ in page.get_text("words"):
         if not str(word).strip():
             continue
         key = (block, line)
-        g = groups.get(key)
-        if g is None:
-            groups[key] = [x0, y0, x1, y1, [word]]
+        if key not in groups:
+            groups[key] = []
             order.append(key)
-        else:
-            g[0], g[1], g[2], g[3] = min(g[0], x0), min(g[1], y0), max(g[2], x1), max(g[3], y1)
-            g[4].append(word)
-    lines = []
+        groups[key].append((x0, y0, x1, y1, word))
+
+    def nx(v):
+        return round((v - rect.x0) / w, 4)
+
+    def ny(v):
+        return round((v - rect.y0) / h, 4)
+
+    lines, total = [], 0
     for key in order[:800]:
-        x0, y0, x1, y1, words = groups[key]
-        r = fitz.Rect(x0, y0, x1, y1) * page.rotation_matrix  # text space -> rotated page as rendered
-        lines.append([
-            round((r.x0 - rect.x0) / w, 4), round((r.y0 - rect.y0) / h, 4),
-            round((r.x1 - rect.x0) / w, 4), round((r.y1 - rect.y0) / h, 4), " ".join(words),
-        ])
+        words, ux0, uy0, ux1, uy1 = [], 9.0, 9.0, -9.0, -9.0
+        for x0, y0, x1, y1, word in groups[key]:
+            r = fitz.Rect(x0, y0, x1, y1) * rot
+            wx0, wy0, wx1, wy1 = nx(r.x0), ny(r.y0), nx(r.x1), ny(r.y1)
+            words.append([wx0, wy0, wx1, wy1, word])
+            ux0, uy0, ux1, uy1 = min(ux0, wx0), min(uy0, wy0), max(ux1, wx1), max(uy1, wy1)
+        total += len(words)
+        if total > 3000:
+            break
+        lines.append([ux0, uy0, ux1, uy1, words])
     return json.dumps({"lines": lines})
 
 

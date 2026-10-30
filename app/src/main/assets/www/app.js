@@ -10,13 +10,14 @@
   /* ------------------------------------------------------------------ *
    * Defaults: identical to the desktop tool.                           *
    * ------------------------------------------------------------------ */
+  const LITE_AUTO = (navigator.deviceMemory || 8) <= 2 || (navigator.hardwareConcurrency || 8) <= 4;
   const DEFAULTS = {
     top: "0", bottom: "0", regions: "", v: 3,
     header: "", footer: "",
     watermark: "", imgWm: true, xrefs: "",
     meta: true, annots: false, links: false, extras: false, hidden: false,
     autoUpdate: false,
-    theme: "eraser", accent: 0,
+    theme: "eraser", accent: 0, lite: LITE_AUTO,
   };
   const STORE_KEY = "pdfcleaner.settings.v1";
 
@@ -37,7 +38,7 @@
     ovl: $("#busy"), ovlTitle: $("#busy-title"), ovlDetail: $("#busy-detail"), ovlProg: $("#busy-prog"), ovlFill: $("#busy-prog-fill"),
     ovlPct: $("#busy-pct"), ovlEta: $("#busy-eta"), ovlElapsed: $("#busy-elapsed"), ovlNote: $("#busy-note"), ovlNoteText: $("#busy-note-text"),
     updCard: $("#card-update"), appVer: $("#app-ver"), updStatus: $("#upd-status"), updCheck: $("#upd-check"), updCheckLabel: $("#upd-check-label"),
-    updGet: $("#upd-get"), updGetLabel: $("#upd-get-label"), updNotes: $("#upd-notes"), autoUpd: $("#opt-autoupd"),
+    updGet: $("#upd-get"), updGetLabel: $("#upd-get-label"), updNotes: $("#upd-notes"), autoUpd: $("#opt-autoupd"), lite: $("#opt-lite"),
     updTop: $("#upd-top"), updTopTitle: $("#upd-top-title"),
   };
 
@@ -127,8 +128,9 @@
     el.status.textContent = t;
     if (!state.busy) return;
     ovl.last = Date.now();
-    el.ovlDetail.textContent = tidyPaths(t);
     const m = /page (\d+) of (\d+)/i.exec(t);
+    if (m) { const now = performance.now(); if (now - (ovl.w || 0) < 120) return; ovl.w = now; }
+    el.ovlDetail.textContent = tidyPaths(t);
     if (m) {
       const f = (+m[1]) / Math.max(1, +m[2]);
       const b = state.batch;
@@ -266,7 +268,7 @@
       header: el.header.value, footer: el.footer.value,
       watermark: el.watermark.value, imgWm: el.imgWm.checked, xrefs: el.xrefs.value,
       meta: el.meta.checked, annots: el.annots.checked, links: el.links.checked, extras: el.extras.checked, hidden: el.hidden.checked,
-      autoUpdate: el.autoUpd.checked,
+      autoUpdate: el.autoUpd.checked, lite: el.lite.checked,
       theme: look.theme, accent: look.accent, v: 3,
     };
   }
@@ -274,14 +276,20 @@
     el.top.value = s.top; el.bottom.value = s.bottom; el.regions.value = s.regions;
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
-    el.meta.checked = !!s.meta; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = !!s.extras; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate;
+    el.meta.checked = !!s.meta; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = !!s.extras; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate; el.lite.checked = !!s.lite; applyLite();
     look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "eraser";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
     applyAppearance();
     syncRange(el.top, el.topRange); syncRange(el.bottom, el.bottomRange);
     renderOverlay(); renderXrefChips();
   }
-  function persist() { if (state.itemMode) return; try { localStorage.setItem(STORE_KEY, JSON.stringify(readSettings())); } catch (e) { /* private mode */ } }
+  let persistT = 0;
+  function flushPersist() { clearTimeout(persistT); persistT = 0; if (state.itemMode) return; try { localStorage.setItem(STORE_KEY, JSON.stringify(readSettings())); } catch (e) { /* private mode */ } }
+  function persist() { if (state.itemMode) return; clearTimeout(persistT); persistT = setTimeout(flushPersist, 250); }
+  window.addEventListener("pagehide", flushPersist);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushPersist(); });
+  function applyLite() { document.documentElement.classList.toggle("lite", el.lite.checked); }
+  el.lite.addEventListener("change", applyLite);
   function loadSettings() {
     let s = DEFAULTS;
     try {
@@ -304,7 +312,7 @@
     r.addEventListener("input", () => { t.value = String(r.value); syncRange(t, r); renderOverlay(); persist(); });
     t.addEventListener("input", () => { syncRange(t, r); renderOverlay(); persist(); });
   });
-  [el.regions, el.header, el.footer, el.watermark, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.autoUpd].forEach((n) =>
+  [el.regions, el.header, el.footer, el.watermark, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.autoUpd, el.lite].forEach((n) =>
     n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); })
   );
   el.reset.addEventListener("click", () => { applySettings(DEFAULTS); persist(); toast("Settings reset to defaults"); });
@@ -406,30 +414,55 @@
   el.pgPrev.addEventListener("click", () => { if (state.page > 0) { state.page--; loadPreview(); } });
   el.pgNext.addEventListener("click", () => { if (state.page < state.pages - 1) { state.page++; loadPreview(); } });
 
-  /* Copyable text laid over the preview image */
-  let textLines = [];
-  function clearTextLayer() { textLines = []; $("#textlayer").textContent = ""; }
+  /* Copyable text laid over the preview image: every word sits at its own position */
+  let textLines = [], layoutGen = 0, layoutRaf = 0, measureCtx = null;
+  function clearTextLayer() { layoutGen++; textLines = []; $("#textlayer").textContent = ""; }
+  function naturalWidth(w) {
+    if (w.nw) return w.nw;
+    measureCtx = measureCtx || document.createElement("canvas").getContext("2d");
+    measureCtx.font = "100px sans-serif";
+    w.nw = (measureCtx.measureText(w[4]).width || 1) / 100;
+    return w.nw;
+  }
+  function buildTextLine(line, W, H) {
+    const [x0, y0, x1, y1, words] = line;
+    const lw = (x1 - x0) * W, lh = (y1 - y0) * H;
+    if (lw < 2 || lh < 2) return null;
+    const vertical = lh > lw * 1.5 && words.reduce((n, w) => n + w[4].length, 0) > 2;
+    const div = document.createElement("div"); div.className = "tl";
+    const fs = (vertical ? lw : lh) * 0.85;
+    Object.assign(div.style, { left: x0 * W + "px", top: y0 * H + "px", lineHeight: (vertical ? lw : lh) + "px" });
+    if (vertical) { div.style.width = lw + "px"; div.style.writingMode = "vertical-rl"; } else div.style.height = lh + "px";
+    let cursor = vertical ? y0 : x0;
+    words.forEach((w, j) => {
+      const a0 = vertical ? w[1] : w[0], a1 = vertical ? w[3] : w[2];
+      const len = (a1 - a0) * (vertical ? H : W);
+      if (len < 1) return;
+      const k = Math.min(8, Math.max(0.1, len / (naturalWidth(w) * fs)));
+      const sp = document.createElement("span"); sp.textContent = w[4];
+      sp.style.fontSize = fs + "px";
+      if (vertical) { sp.style.height = len + "px"; sp.style.width = lw + "px"; sp.style.marginTop = (a0 - cursor) * H + "px"; sp.style.transform = "scaleY(" + k + ")"; }
+      else { sp.style.width = len + "px"; sp.style.marginLeft = (a0 - cursor) * W + "px"; sp.style.transform = "scaleX(" + k + ")"; }
+      cursor = a1; div.append(sp);
+      if (j < words.length - 1) div.append(" ");
+    });
+    return div;
+  }
   function layoutTextLayer() {
-    const tl = $("#textlayer"); tl.textContent = "";
+    const gen = ++layoutGen, tl = $("#textlayer"); tl.textContent = "";
     const W = $("#pagebox").clientWidth, H = $("#pagebox").clientHeight;
     if (!W || !H || !textLines.length) return;
-    const ctx = layoutTextLayer.ctx || (layoutTextLayer.ctx = document.createElement("canvas").getContext("2d"));
-    const frag = document.createDocumentFragment();
-    for (const [x0, y0, x1, y1, text] of textLines) {
-      const lw = (x1 - x0) * W, lh = (y1 - y0) * H;
-      if (lw < 2 || lh < 2) continue;
-      const vertical = lh > lw * 1.5 && text.length > 2;
-      const fs = (vertical ? lw : lh) * 0.85;
-      ctx.font = fs + "px sans-serif";
-      const k = Math.min(8, Math.max(0.1, (vertical ? lh : lw) / (ctx.measureText(text).width || 1)));
-      const sp = document.createElement("span"); sp.textContent = text;
-      Object.assign(sp.style, { left: x0 * W + "px", top: y0 * H + "px", fontSize: fs + "px", lineHeight: (vertical ? lw : lh) + "px" });
-      if (vertical) { sp.style.writingMode = "vertical-rl"; sp.style.transform = "scaleY(" + k + ")"; }
-      else sp.style.transform = "scaleX(" + k + ")";
-      frag.append(sp);
-    }
-    tl.append(frag);
+    let i = 0;
+    const step = () => {
+      if (gen !== layoutGen) return;
+      const frag = document.createDocumentFragment(), end = Math.min(i + 40, textLines.length);
+      for (; i < end; i++) { const d = buildTextLine(textLines[i], W, H); if (d) frag.append(d); }
+      tl.append(frag);
+      if (i < textLines.length) requestAnimationFrame(step);
+    };
+    step();
   }
+  function scheduleLayout() { if (!layoutRaf) layoutRaf = requestAnimationFrame(() => { layoutRaf = 0; layoutTextLayer(); }); }
   async function loadTextLayer(path, pw, page, token) {
     try {
       const r = await rpc("words", { path, password: pw, page });
@@ -437,10 +470,22 @@
       textLines = JSON.parse(r.json).lines; layoutTextLayer();
     } catch (e) { if (token === state.previewToken) clearTextLayer(); }
   }
-  if (window.ResizeObserver) new ResizeObserver(() => layoutTextLayer()).observe($("#pagebox"));
-  el.prevImg.addEventListener("load", layoutTextLayer);
+  if (window.ResizeObserver) new ResizeObserver(scheduleLayout).observe($("#pagebox"));
+  el.prevImg.addEventListener("load", scheduleLayout);
 
-  async function loadPreview() {
+  /* Preview rendering: quick page flips are merged into one render; size follows the screen */
+  let previewRun = null, previewAgain = false;
+  function previewZoom() {
+    if (!state.pageW) return 1.5;
+    const target = Math.min(Math.max(innerWidth, innerHeight) * Math.min(window.devicePixelRatio || 1, 2), 2000) * (SC < 1 ? 0.8 : 1);
+    return Math.min(2.5, Math.max(0.8, target / Math.max(state.pageW, state.pageH)));
+  }
+  function loadPreview() {
+    if (previewRun) { previewAgain = true; return previewRun; }
+    previewRun = (async () => { do { previewAgain = false; await loadPreviewOnce(); } while (previewAgain); })().finally(() => { previewRun = null; });
+    return previewRun;
+  }
+  async function loadPreviewOnce() {
     const token = ++state.previewToken;
     clearTextLayer();
     const path = state.previewSrc === "clean" ? state.cleanPath : state.inPath;
@@ -455,8 +500,8 @@
     el.stageMsg.textContent = "Rendering…";
     try {
       const pw = state.previewSrc === "orig" ? state.pw : "";
-      const r = await rpc("preview", { path, password: pw, page: state.page, zoom: 1.8 });
-      if (token !== state.previewToken) return;
+      const r = await rpc("preview", { path, password: pw, page: state.page, zoom: previewZoom() });
+      if (token !== state.previewToken || previewAgain) return;
       const url = URL.createObjectURL(new Blob([r.png], { type: "image/jpeg" }));
       const old = state.previewUrl; state.previewUrl = url;
       el.prevImg.src = url; el.prevImg.hidden = false;
@@ -532,7 +577,7 @@
   const toggleDraw = (on) => setTool(on ? "draw" : null);
   ["t", "f"].forEach((w) => {
     const node = $("#hf-" + w);
-    let on = false, off = 0;
+    let on = false, off = 0, raf = 0, pending = null;
     node.addEventListener("pointerdown", (e) => {
       on = true; node.setPointerCapture(e.pointerId); e.preventDefault();
       const r = node.getBoundingClientRect();
@@ -545,7 +590,8 @@
       const raw = w === "t" ? ((y - r.top) / r.height) * 100 : ((r.bottom - y) / r.height) * 100;
       const pct = Math.round(Math.min(40, Math.max(0, raw)) * 2) / 2;
       const t = w === "t" ? el.top : el.bottom;
-      if (t.value !== String(pct)) { t.value = String(pct); t.dispatchEvent(new Event("input")); }
+      pending = { t, pct };
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; const q = pending; if (q && q.t.value !== String(q.pct)) { q.t.value = String(q.pct); q.t.dispatchEvent(new Event("input")); } });
     });
     const end = () => { on = false; };
     node.addEventListener("pointerup", end);

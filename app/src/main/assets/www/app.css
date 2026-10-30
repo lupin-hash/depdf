@@ -515,8 +515,17 @@ body.viewer-open { overflow: hidden; }
 .bpw-spare { display: grid; gap: 8px; }
 .bpw-slot { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
 
+
 /* ---- Copyable text over the preview ---- */
 .textlayer { position: absolute; inset: 0; overflow: hidden; color: transparent; cursor: text; user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
-.textlayer span { position: absolute; white-space: pre; transform-origin: 0 0; user-select: text; -webkit-user-select: text; }
+.textlayer .tl { position: absolute; white-space: pre; font-size: 0; user-select: text; -webkit-user-select: text; }
+.textlayer .tl span { display: inline-block; vertical-align: top; white-space: pre; overflow: visible; transform-origin: 0 0; user-select: text; -webkit-user-select: text; }
 .textlayer ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
 .stage.drawing .textlayer, .stage.hfmode .textlayer { pointer-events: none; user-select: none; -webkit-user-select: none; }
+
+/* ---- Lighter visuals for slower devices ---- */
+html.lite .modal, html.lite .busy, html.lite .batch-bar { -webkit-backdrop-filter: none; backdrop-filter: none; }
+html.lite .modal, html.lite .busy { background: color-mix(in srgb, var(--bg) 90%, transparent); }
+html.lite body::before { display: none; }
+html.lite .bubble.active, html.lite .hf-pill > span { animation: none; }
+html.lite .pagebox, html.lite .modal-card { transition: none; animation: none; }

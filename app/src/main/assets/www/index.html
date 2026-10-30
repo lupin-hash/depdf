@@ -6,7 +6,7 @@
 <title>DePDF</title>
 <meta name="description" content="Clean and unlock PDFs privately on your device before data extraction.">
 <meta name="theme-color" content="#fbeee9">
-<script>try{var s=JSON.parse(localStorage.getItem("pdfcleaner.settings.v1")||"{}"),t=s.theme;if(!t||((s.v||1)<3&&t==="system"))t="eraser";if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var s=JSON.parse(localStorage.getItem("pdfcleaner.settings.v1")||"{}"),t=s.theme;if(!t||((s.v||1)<3&&t==="system"))t="eraser";if(s.lite===true||(s.lite===undefined&&((navigator.deviceMemory||8)<=2||(navigator.hardwareConcurrency||8)<=4)))document.documentElement.classList.add("lite");if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
 <meta name="color-scheme" content="light dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -159,6 +159,10 @@
         <div class="theme-list" id="theme-list" role="radiogroup" aria-label="Theme"></div>
         <h3 class="sub-h">Accent color</h3>
         <div class="accent-list" id="accent-list" role="radiogroup" aria-label="Accent color"></div>
+      </section>
+
+      <section class="card" aria-label="Performance">
+        <div class="switches"><label class="switch"><input type="checkbox" id="opt-lite"><span class="track"></span><span class="txt"><b>Lighter visuals</b><small>Less blur and motion. Helps slower devices.</small></span></label></div>
       </section>
 
         <section class="card" id="card-update" aria-labelledby="h-upd" hidden>
