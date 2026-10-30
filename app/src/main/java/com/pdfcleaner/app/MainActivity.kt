@@ -336,7 +336,8 @@ class MainActivity : AppCompatActivity() {
                 try {
                     when (mode) {
                         "share" -> shareFile(file, mime)
-                        "folder" -> saveToFolder(file, mime)
+                        "folder" -> saveToFolder(file, mime, false)
+                        "folder_quiet" -> saveToFolder(file, mime, true)
                         else -> saveFile(file, mime)
                     }
                 } catch (e: Exception) {
@@ -503,7 +504,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Writes a finished file into the folder the user picked. */
-    private fun saveToFolder(file: File, mime: String) {
+    private fun saveToFolder(file: File, mime: String, quiet: Boolean = false) {
         val tree = treeUri
         if (tree == null) {
             saveFile(file, mime)
@@ -517,7 +518,7 @@ class MainActivity : AppCompatActivity() {
                 contentResolver.openOutputStream(doc, "w")?.use { out ->
                     file.inputStream().use { it.copyTo(out) }
                 }
-                toast("Saved to ${folderLabel(tree)}")
+                if (!quiet) toast("Saved to ${folderLabel(tree)}")
             } catch (e: Exception) {
                 toast("Couldn't save: ${e.message}")
             }

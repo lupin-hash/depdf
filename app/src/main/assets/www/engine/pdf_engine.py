@@ -28,7 +28,7 @@ APP_TITLE = "PDF Cleaner for Data Extraction"
 class CleanOptions:
     remove_metadata: bool = True
     top_percent: float = 0.0
-    bottom_percent: float = 2.0
+    bottom_percent: float = 0.0
     watermark_phrases: List[str] = None  # type: ignore[assignment]
     header_phrases: List[str] = None  # type: ignore[assignment]
     footer_phrases: List[str] = None  # type: ignore[assignment]
@@ -1307,8 +1307,7 @@ def close_preview_cache() -> None:
     _PREVIEW["doc"] = None
 
 
-def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float = 1.2) -> dict:
-    """Render one page to JPEG bytes for the on-screen preview (key kept as "png")."""
+def _preview_doc(path: str, password: str = ""):
     import os
     st = os.stat(path)
     key = (path, password, st.st_size, int(st.st_mtime))
@@ -1316,7 +1315,12 @@ def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float 
         close_preview_cache()
         _PREVIEW["doc"] = open_pdf(path, password)
         _PREVIEW["key"] = key
-    doc = _PREVIEW["doc"]
+    return _PREVIEW["doc"]
+
+
+def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float = 1.2) -> dict:
+    """Render one page to JPEG bytes for the on-screen preview (key kept as "png")."""
+    doc = _preview_doc(path, password)
     count = len(doc)
     page_index = max(0, min(int(page_index), count - 1))
     page = doc[page_index]
@@ -1324,6 +1328,37 @@ def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float 
     z = min(float(zoom), 2400.0 / max(w, h, 1.0))
     pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
     return {"png": pix.tobytes("jpeg", jpg_quality=85), "pages": count, "page": page_index, "w": w, "h": h}
+
+
+def page_text_lines(path: str, password: str = "", page_index: int = 0) -> str:
+    """Text lines of one page as JSON: {"lines": [[x0, y0, x1, y1, text], ...]} in 0..1 page fractions.
+    Used to lay copyable text over the preview image."""
+    doc = _preview_doc(path, password)
+    page_index = max(0, min(int(page_index), len(doc) - 1))
+    page = doc[page_index]
+    rect = page.rect
+    w, h = max(rect.width, 1.0), max(rect.height, 1.0)
+    groups, order = {}, []
+    for x0, y0, x1, y1, word, block, line, _ in page.get_text("words"):
+        if not str(word).strip():
+            continue
+        key = (block, line)
+        g = groups.get(key)
+        if g is None:
+            groups[key] = [x0, y0, x1, y1, [word]]
+            order.append(key)
+        else:
+            g[0], g[1], g[2], g[3] = min(g[0], x0), min(g[1], y0), max(g[2], x1), max(g[3], y1)
+            g[4].append(word)
+    lines = []
+    for key in order[:800]:
+        x0, y0, x1, y1, words = groups[key]
+        r = fitz.Rect(x0, y0, x1, y1) * page.rotation_matrix  # text space -> rotated page as rendered
+        lines.append([
+            round((r.x0 - rect.x0) / w, 4), round((r.y0 - rect.y0) / h, 4),
+            round((r.x1 - rect.x0) / w, 4), round((r.y1 - rect.y0) / h, 4), " ".join(words),
+        ])
+    return json.dumps({"lines": lines})
 
 
 def is_protected(path: str) -> bool:

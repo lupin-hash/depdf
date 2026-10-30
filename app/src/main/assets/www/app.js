@@ -11,21 +11,19 @@
    * Defaults: identical to the desktop tool.                           *
    * ------------------------------------------------------------------ */
   const DEFAULTS = {
-    top: "0", bottom: "2", regions: "",
+    top: "0", bottom: "0", regions: "", v: 3,
     header: "", footer: "",
     watermark: "", imgWm: true, xrefs: "",
     meta: true, annots: false, links: false, extras: false, hidden: false,
     autoUpdate: false,
-    theme: "system", accent: 0,
+    theme: "eraser", accent: 0,
   };
   const STORE_KEY = "pdfcleaner.settings.v1";
 
   const el = {
     boot: $("#boot"), bootStage: $("#boot-stage"), bootBar: $("#boot-bar"), bootNote: $("#boot-note"), bootRetry: $("#boot-retry"),
     app: $("#app"), bar: $("#actionbar"), pill: $("#pill"), pillText: $("#pill-text"),
-    fileInput: $("#file-input"), batchInput: $("#batch-input"), drop: $("#drop"), dropTitle: $("#drop-title"), dropSub: $("#drop-sub"),
-    chip: $("#filechip"), fname: $("#fname"), fsub: $("#fsub"), lock: $("#lockbadge"), changeFile: $("#change-file"),
-    outName: $("#out-name"), password: $("#password"), pwToggle: $("#pw-toggle"),
+    fileInput: $("#file-input"), batchInput: $("#batch-input"),
     top: $("#top"), topRange: $("#top-range"), bottom: $("#bottom"), bottomRange: $("#bottom-range"), regions: $("#regions"),
     header: $("#header-text"), footer: $("#footer-text"), watermark: $("#watermark"), imgWm: $("#img-wm"), xrefs: $("#xrefs"),
     meta: $("#opt-meta"), annots: $("#opt-annots"), links: $("#opt-links"), extras: $("#opt-extras"), hidden: $("#opt-hidden"),
@@ -38,7 +36,6 @@
     toast: $("#toast"),
     ovl: $("#busy"), ovlTitle: $("#busy-title"), ovlDetail: $("#busy-detail"), ovlProg: $("#busy-prog"), ovlFill: $("#busy-prog-fill"),
     ovlPct: $("#busy-pct"), ovlEta: $("#busy-eta"), ovlElapsed: $("#busy-elapsed"), ovlNote: $("#busy-note"), ovlNoteText: $("#busy-note-text"),
-    bigNote: $("#big-note"), bigNoteText: $("#big-note-text"),
     updCard: $("#card-update"), appVer: $("#app-ver"), updStatus: $("#upd-status"), updCheck: $("#upd-check"), updCheckLabel: $("#upd-check-label"),
     updGet: $("#upd-get"), updGetLabel: $("#upd-get-label"), updNotes: $("#upd-notes"), autoUpd: $("#opt-autoupd"),
     updTop: $("#upd-top"), updTopTitle: $("#upd-top-title"),
@@ -57,7 +54,7 @@
     cleanPath: null, cleanName: null,
     previewSrc: "orig", page: 0,
     pageW: 595, pageH: 842,
-    drawing: false, hf: false, outputs: [], previewToken: 0, previewUrl: null,
+    drawing: false, hf: false, pw: "", unlocked: false, ucKey: null, stash: null, itemIdx: null, itemMode: false, globalSnap: null, engineGen: 0, outputs: [], previewToken: 0, previewUrl: null,
     batch: null,
   };
 
@@ -156,15 +153,11 @@
     if (files.length < BATCH_FILES && total < BATCH_MB * MB) return "";
     return files.length + " PDFs (" + fmtSize(total) + ") run one by one. Keep the app open.";
   }
-  function updateBigNote() {
-    const n = bigFileNote(state.file, state.pages);
-    el.bigNote.hidden = !n; el.bigNoteText.textContent = n;
-  }
 
   function setBusy(busy, status, title, note) {
     state.busy = busy;
     if (!busy) state.batch = null;
-    [el.btnAnalyze, el.btnClean, el.btnBatch, el.btnUnlock, $("#v-analyze"), $("#bubble")].forEach((b) => (b.disabled = busy));
+    [el.btnAnalyze, el.btnClean, el.btnBatch, el.btnUnlock, $("#o-analyze"), $("#bubble"), $("#b-clean"), $("#b-add"), $("#b-pw")].forEach((b) => (b.disabled = busy));
     el.busyBar.hidden = !busy;
     if (busy) showOverlay(title, note); else hideOverlay();
     if (status) setStatus(status);
@@ -274,7 +267,7 @@
       watermark: el.watermark.value, imgWm: el.imgWm.checked, xrefs: el.xrefs.value,
       meta: el.meta.checked, annots: el.annots.checked, links: el.links.checked, extras: el.extras.checked, hidden: el.hidden.checked,
       autoUpdate: el.autoUpd.checked,
-      theme: look.theme, accent: look.accent,
+      theme: look.theme, accent: look.accent, v: 3,
     };
   }
   function applySettings(s) {
@@ -282,16 +275,21 @@
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
     el.meta.checked = !!s.meta; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = !!s.extras; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate;
-    look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "system";
+    look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "eraser";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
     applyAppearance();
     syncRange(el.top, el.topRange); syncRange(el.bottom, el.bottomRange);
     renderOverlay(); renderXrefChips();
   }
-  function persist() { try { localStorage.setItem(STORE_KEY, JSON.stringify(readSettings())); } catch (e) { /* private mode */ } }
+  function persist() { if (state.itemMode) return; try { localStorage.setItem(STORE_KEY, JSON.stringify(readSettings())); } catch (e) { /* private mode */ } }
   function loadSettings() {
     let s = DEFAULTS;
-    try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORE_KEY) || "{}") }; } catch (e) { /* ignore */ }
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+      if ((saved.v || 1) < 2 && saved.bottom === "2") saved.bottom = "0";
+      if ((saved.v || 1) < 3 && saved.theme === "system") saved.theme = "eraser";
+      s = { ...DEFAULTS, ...saved, v: 3 };
+    } catch (e) { /* ignore */ }
     applySettings(s);
   }
 
@@ -330,32 +328,20 @@
   /* ------------------------------------------------------------------ *
    * Password field                                                     *
    * ------------------------------------------------------------------ */
-  el.pwToggle.addEventListener("click", () => {
-    const show = el.password.type === "password";
-    el.password.type = show ? "text" : "password";
-    el.pwToggle.setAttribute("aria-pressed", String(show));
-    el.pwToggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
-    el.pwToggle.firstElementChild.firstElementChild.setAttribute("href", show ? "#i-eye-off" : "#i-eye");
-  });
-  el.password.addEventListener("change", () => { if (state.file && state.locked) loadPreview(); });
-  el.password.addEventListener("keydown", (e) => { if (e.key === "Enter") { el.password.blur(); } });
 
   /* ------------------------------------------------------------------ *
    * Choosing a file                                                    *
    * ------------------------------------------------------------------ */
-  el.drop.addEventListener("click", () => el.fileInput.click());
-  el.changeFile.addEventListener("click", () => el.fileInput.click());
-  el.fileInput.addEventListener("change", () => { const f = el.fileInput.files[0]; el.fileInput.value = ""; if (f) selectFile(f); });
-  ["dragenter", "dragover"].forEach((t) => el.drop.addEventListener(t, (e) => { e.preventDefault(); el.drop.classList.add("over"); }));
-  ["dragleave", "drop"].forEach((t) => el.drop.addEventListener(t, (e) => { e.preventDefault(); el.drop.classList.remove("over"); }));
-  el.drop.addEventListener("drop", (e) => { const f = e.dataTransfer?.files?.[0]; if (f) selectFile(f); });
+  el.fileInput.addEventListener("change", () => { const f = el.fileInput.files[0]; el.fileInput.value = ""; if (f) { go("upload", "single"); selectFile(f); } });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f && !state.busy) { go("upload", "single"); selectFile(f); } });
 
   const isPdf = (f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
 
   async function selectFile(file) {
     if (state.busy) return;
     if (!isPdf(file)) { toast("The input file must be a PDF.", true); return; }
-    state.pages = 0; el.bigNote.hidden = true; setTool(null);
+    state.pages = 0; setTool(null);
     if (tooBig(file, 0)) { await confirmBox({ title: "PDF is too large", text: limitText(), ok: "OK", cancel: null }); if (!state.file) go("home"); return; }
     setBusy(true, "Opening " + file.name + "…", "Opening PDF", isBigFile(file, 0) ? bigFileNote(file, 0) : "");
     try {
@@ -363,38 +349,37 @@
       if (state.cleanPath) await rpc("rm", { paths: [state.cleanPath] });
       state.cleanPath = null; state.cleanName = null;
       clearOutputs();
-      const buf = await file.arrayBuffer();
+      const key = file.name + "|" + file.size + "|" + file.lastModified;
+      const cached = await ucGet(key);
+      const buf = cached || (await file.arrayBuffer());
       const path = "/in/main/" + safeName(file.name);
       await rpc("put", { path, buffer: buf }, [buf]);
       state.file = file; state.inPath = path; state.page = 0; state.previewSrc = "orig";
-      const prot = await rpc("protected", { path });
-      state.locked = prot.protected;
-      if (state.locked) {
+      state.unlocked = !!cached; state.ucKey = cached ? key : null;
+      const prot = cached ? { protected: false } : await rpc("protected", { path });
+      state.locked = prot.protected || !!cached;
+      if (prot.protected) {
         setBusy(false, "Password needed");
         const pw = await askPassword(file.name, (p) => rpc("preview", { path, password: p, page: 0, zoom: 0.2 }));
         if (pw === null) {
           try { await rpc("rm", { paths: [path] }); } catch (e) { /* ignore */ }
-          state.file = null; state.inPath = null; el.password.value = "";
-          go("home"); setBusy(false, "Ready"); return;
+          state.file = null; state.inPath = null; state.pw = "";
+          syncUploadItem(); go("home"); setBusy(false, "Ready"); return;
         }
-        el.password.value = pw;
+        state.pw = pw;
         setBusy(true, "Opening " + file.name + "…", "Opening PDF");
-      } else { el.password.value = ""; }
-      el.fname.textContent = file.name;
-      el.fsub.textContent = fmtSize(file.size);
-      el.chip.hidden = false; el.drop.hidden = true;
-      el.lock.hidden = !state.locked;
-      el.outName.value = stemOf(file.name) + "_clean.pdf";
+        await saveUnlockedCopy(file, key, path, pw);
+      } else { state.pw = ""; }
       el.prevCard.hidden = false; $("#vt-name").textContent = file.name; syncViewer();
       setSeg("orig"); el.seg.querySelector('[data-src="clean"]').disabled = true;
       writeReport("Tap Analyze to scan this PDF.");
       await loadPreview();
       if (tooBig(null, state.pages)) {
         try { await rpc("rm", { paths: [state.inPath] }); } catch (e) { /* ignore */ }
-        Object.assign(state, { file: null, inPath: null, pages: 0 }); el.prevImg.hidden = true; syncViewer(); setBusy(false, "Ready"); go("home");
+        Object.assign(state, { file: null, inPath: null, pages: 0 }); el.prevImg.hidden = true; syncViewer(); syncUploadItem(); setBusy(false, "Ready"); go("home");
         await confirmBox({ title: "PDF is too large", text: limitText(), ok: "OK", cancel: null }); return;
       }
-      updateBigNote();
+      syncUploadItem();
       setBusy(false, "Input selected");
     } catch (err) {
       setBusy(false, "Could not open the PDF");
@@ -421,11 +406,46 @@
   el.pgPrev.addEventListener("click", () => { if (state.page > 0) { state.page--; loadPreview(); } });
   el.pgNext.addEventListener("click", () => { if (state.page < state.pages - 1) { state.page++; loadPreview(); } });
 
+  /* Copyable text laid over the preview image */
+  let textLines = [];
+  function clearTextLayer() { textLines = []; $("#textlayer").textContent = ""; }
+  function layoutTextLayer() {
+    const tl = $("#textlayer"); tl.textContent = "";
+    const W = $("#pagebox").clientWidth, H = $("#pagebox").clientHeight;
+    if (!W || !H || !textLines.length) return;
+    const ctx = layoutTextLayer.ctx || (layoutTextLayer.ctx = document.createElement("canvas").getContext("2d"));
+    const frag = document.createDocumentFragment();
+    for (const [x0, y0, x1, y1, text] of textLines) {
+      const lw = (x1 - x0) * W, lh = (y1 - y0) * H;
+      if (lw < 2 || lh < 2) continue;
+      const vertical = lh > lw * 1.5 && text.length > 2;
+      const fs = (vertical ? lw : lh) * 0.85;
+      ctx.font = fs + "px sans-serif";
+      const k = Math.min(8, Math.max(0.1, (vertical ? lh : lw) / (ctx.measureText(text).width || 1)));
+      const sp = document.createElement("span"); sp.textContent = text;
+      Object.assign(sp.style, { left: x0 * W + "px", top: y0 * H + "px", fontSize: fs + "px", lineHeight: (vertical ? lw : lh) + "px" });
+      if (vertical) { sp.style.writingMode = "vertical-rl"; sp.style.transform = "scaleY(" + k + ")"; }
+      else sp.style.transform = "scaleX(" + k + ")";
+      frag.append(sp);
+    }
+    tl.append(frag);
+  }
+  async function loadTextLayer(path, pw, page, token) {
+    try {
+      const r = await rpc("words", { path, password: pw, page });
+      if (token !== state.previewToken) return;
+      textLines = JSON.parse(r.json).lines; layoutTextLayer();
+    } catch (e) { if (token === state.previewToken) clearTextLayer(); }
+  }
+  if (window.ResizeObserver) new ResizeObserver(() => layoutTextLayer()).observe($("#pagebox"));
+  el.prevImg.addEventListener("load", layoutTextLayer);
+
   async function loadPreview() {
     const token = ++state.previewToken;
+    clearTextLayer();
     const path = state.previewSrc === "clean" ? state.cleanPath : state.inPath;
     if (!path) return;
-    const needsPw = state.previewSrc === "orig" && state.locked && !el.password.value;
+    const needsPw = state.previewSrc === "orig" && state.locked && !state.unlocked && !state.pw;
     if (needsPw) {
       el.prevImg.hidden = true;
       el.stageMsg.textContent = "This PDF is password-protected. Enter the password to see a preview.";
@@ -434,7 +454,7 @@
     }
     el.stageMsg.textContent = "Rendering…";
     try {
-      const pw = state.previewSrc === "orig" ? el.password.value : "";
+      const pw = state.previewSrc === "orig" ? state.pw : "";
       const r = await rpc("preview", { path, password: pw, page: state.page, zoom: 1.8 });
       if (token !== state.previewToken) return;
       const url = URL.createObjectURL(new Blob([r.png], { type: "image/jpeg" }));
@@ -446,8 +466,8 @@
       el.pgLabel.textContent = "Page " + (r.page + 1) + " of " + r.pages;
       el.pgPrev.disabled = r.page <= 0; el.pgNext.disabled = r.page >= r.pages - 1;
       el.draw.disabled = state.previewSrc === "clean";
-      if (state.locked && state.previewSrc === "orig") el.lock.hidden = false;
       renderOverlay();
+      loadTextLayer(path, pw, r.page, token);
     } catch (err) {
       if (token !== state.previewToken) return;
       el.prevImg.hidden = true;
@@ -464,6 +484,12 @@
     });
     return out;
   }
+  function removeRegion(i) {
+    const list = parseRegionsLenient(el.regions.value);
+    list.splice(i, 1);
+    el.regions.value = list.map((v) => v.join(",")).join("; ");
+    persist(); renderOverlay();
+  }
   function renderOverlay() {
     const o = el.overlay; o.textContent = "";
     if (state.previewSrc === "clean") return;
@@ -476,8 +502,15 @@
     };
     if (top > 0 && top < 100) mk("b t", { height: top + "%" }, "Header " + top + "%");
     if (bottom > 0 && bottom < 100) mk("b f", { height: bottom + "%" }, "Footer " + bottom + "%");
-    parseRegionsLenient(el.regions.value).forEach(([x0, y0, x1, y1], i) =>
-      mk("r", { left: x0 + "%", top: y0 + "%", width: x1 - x0 + "%", height: y1 - y0 + "%" }, String(i + 1)));
+    parseRegionsLenient(el.regions.value).forEach(([x0, y0, x1, y1], i) => {
+      const box = mk("r", { left: x0 + "%", top: y0 + "%", width: x1 - x0 + "%", height: y1 - y0 + "%" }, String(i + 1));
+      const x = document.createElement("button");
+      x.type = "button"; x.className = "rx"; x.setAttribute("aria-label", "Delete area " + (i + 1));
+      x.innerHTML = '<svg class="ic"><use href="#i-x"/></svg>';
+      x.addEventListener("pointerdown", (e) => e.stopPropagation());
+      x.addEventListener("click", (e) => { e.stopPropagation(); removeRegion(i); });
+      box.appendChild(x);
+    });
     positionHandles();
   }
 
@@ -491,13 +524,12 @@
   function setTool(t) {
     state.drawing = t === "draw"; state.hf = t === "hf";
     el.stage.classList.toggle("drawing", state.drawing);
+    el.stage.classList.toggle("hfmode", state.hf);
     $("#hf").hidden = !state.hf;
-    $("#prev-hint").textContent = t === "draw" ? "Drag to draw. Tap here when done." : t === "hf" ? "Pull the arrows. Tap here when done." : "";
-    el.prevCard.classList.toggle("has-hint", !!t);
+    $("#bubble").classList.toggle("active", !!t);
     if (state.hf) positionHandles();
   }
   const toggleDraw = (on) => setTool(on ? "draw" : null);
-  $("#prev-hint").addEventListener("click", () => setTool(null));
   ["t", "f"].forEach((w) => {
     const node = $("#hf-" + w);
     let on = false, off = 0;
@@ -702,9 +734,9 @@
     try { input = requireInput(); } catch (e) { toast(e.message, true); return; }
     setBusy(true, "Analyzing PDF…", "Analyzing PDF", bigFileNote(state.file, state.pages)); startEta(getSpp() * 0.5 * state.pages); writeReport("Analysis running…");
     try {
-      const r = await rpc("job", { job: { kind: "analyze", input, password: el.password.value, watermark: el.watermark.value, header: el.header.value, footer: el.footer.value } });
+      const r = await rpc("job", { job: { kind: "analyze", input, password: state.pw, watermark: el.watermark.value, header: el.header.value, footer: el.footer.value } });
       writeReport(r.report);
-      lastXrefs = parseXrefs(r.report); renderXrefChips();
+      lastXrefs = parseXrefs(r.report); renderXrefChips(); renderAnalysis(r.report);
       setBusy(false, "Analysis complete"); openModal("modal-analysis");
     } catch (err) { if (err.cancelled) { await afterCancel(false); return; } fail("Analysis failed", err); }
   });
@@ -712,9 +744,9 @@
   /* ------------------------------------------------------------------ *
    * Clean / unlock: name box -> choose folder -> run -> save           *
    * ------------------------------------------------------------------ */
-  const SUFFIX = { clean: "_clean", unlock: "_unlocked" };
+  const SUFFIX = { clean: "_clean", unlock: "_unlocked", batch: "_clean" };
   const nameCtx = { kind: "clean" };
-  const previewName = () => safeName(stemOf(state.file.name) + ($("#nm-suffix").value.trim() || SUFFIX[nameCtx.kind]) + ".pdf");
+  const previewName = () => safeName(stemOf((nameCtx.kind === "batch" ? (batch.items[0] || {}).name : state.file.name) || "file") + ($("#nm-suffix").value.trim() || SUFFIX[nameCtx.kind]) + ".pdf");
 
   function pickFolder() {
     if (!NATIVE || typeof NATIVE.pickFolder !== "function") return Promise.resolve("Downloads");
@@ -723,17 +755,17 @@
       NATIVE.pickFolder();
     });
   }
-  async function saveBlob(blob, name) {
-    if (NATIVE && typeof NATIVE.pickFolder === "function") await nativeSend(blob, name, "folder");
+  async function saveBlob(blob, name, quiet) {
+    if (NATIVE && typeof NATIVE.pickFolder === "function") await nativeSend(blob, name, quiet ? "folder_quiet" : "folder");
     else download(blob, name);
   }
   function openNameDialog(kind) {
     if (state.busy) return;
-    try { requireInput(); if (kind === "clean") getOptions(); } catch (e) { toast(e.message, true); return; }
+    try { if (kind !== "batch") requireInput(); if (kind !== "unlock") getOptions(); } catch (e) { toast(e.message, true); return; }
     nameCtx.kind = kind;
     $("#nm-suffix").value = SUFFIX[kind];
     $("#nm-preview").textContent = previewName();
-    $("#mn-title").textContent = kind === "unlock" ? "Name the unlocked copy" : "Name your cleaned copy";
+    $("#mn-title").textContent = kind === "unlock" ? "Name the unlocked copy" : kind === "batch" ? "Name your cleaned copies" : "Name your cleaned copy";
     openModal("modal-name");
   }
   $("#nm-suffix").addEventListener("input", () => { $("#nm-preview").textContent = previewName(); });
@@ -742,11 +774,12 @@
     closeModal($("#modal-name"));
     const folder = await pickFolder();
     if (!folder) { toast("Choose a folder to save."); openModal("modal-name"); return; }
-    await runSave(kind, name, folder);
+    if (kind === "batch") await runBatch($("#nm-suffix").value.trim() || SUFFIX.batch, folder);
+    else await runSave(kind, name, folder);
   });
 
   async function runSave(kind, name, folder) {
-    const input = state.inPath, password = el.password.value;
+    const input = state.inPath, password = state.pw;
     const unlock = kind === "unlock";
     let opts = null;
     try { if (!unlock) opts = getOptions(); } catch (e) { toast(e.message, true); return; }
@@ -805,80 +838,6 @@
       openModal("modal-password");
       setTimeout(() => inp.focus(), 60);
     });
-  }
-
-  el.btnBatch.addEventListener("click", () => { if (!state.busy) el.batchInput.click(); });
-  el.batchInput.addEventListener("change", async () => {
-    const all = [...el.batchInput.files]; el.batchInput.value = "";
-    if (!all.length || state.busy) return;
-    let opts;
-    try { opts = getOptions(); } catch (e) { toast(e.message, true); return; }
-    const files = all.filter((f) => isPdf(f) && !/_clean$/i.test(stemOf(f.name))).sort((a, b) => a.name.localeCompare(b.name));
-    if (!files.length) {
-      writeReport("No source PDFs were selected. Files already named *_clean.pdf are skipped.");
-      toast("No source PDFs were selected. Files named *_clean.pdf are skipped.", true); return;
-    }
-    const total = files.reduce((a, f) => a + f.size, 0);
-    if (files.length > MAX_BATCH_FILES || total > MAX_BATCH_MB * MB) {
-      await confirmBox({ title: "Too many files", text: "Up to " + MAX_BATCH_FILES + " PDFs or " + MAX_BATCH_MB + " MB at a time. You chose " + files.length + " (" + fmtSize(total) + "). Select fewer.", ok: "OK", cancel: null });
-      return;
-    }
-    if ((files.length >= BATCH_FILES || total >= BATCH_MB * MB) && !(await confirmBox({ title: "Large batch", text: files.length + " PDFs (" + fmtSize(total) + ") run one by one and may take a while. Keep the app open.", ok: "Start" }))) return;
-    const password = el.password.value;
-    state.batch = { i: 1, n: files.length };
-    setBusy(true, `Batch cleaning ${files.length} PDF(s)…`, "Batch cleaning", batchNote(files));
-    startEta(0);
-    writeReport(`Batch started: ${files.length} PDF(s)\n`);
-    clearOutputs();
-    const done = []; let fails = 0, cancelled = false;
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      if (f.size > MAX_MB * MB) { fails++; writeReport(`SKIPPED: ${f.name}: too large (limit ${MAX_MB} MB)\n`, true); addOutput({ name: f.name, blob: null, error: "Too large for this device" }); continue; }
-      const outName = safeName(stemOf(f.name) + "_clean.pdf");
-      const inP = `/in/b${i}/${safeName(f.name)}`, outP = `/out/b${i}/${outName}`;
-      state.batch = { i: i + 1, n: files.length };
-      el.ovlTitle.textContent = `Cleaning PDF ${i + 1} of ${files.length}`;
-      setStatus(`${f.name}`);
-      try {
-        const buf = await f.arrayBuffer();
-        await rpc("put", { path: inP, buffer: buf }, [buf]);
-        const r = await rpc("job", { job: { kind: "clean", input: inP, output: outP, password, options: opts } });
-        const got = await rpc("get", { path: outP });
-        const blob = new Blob([got.buffer], { type: "application/pdf" });
-        done.push({ name: outName, blob });
-        addOutput({ name: outName, blob });
-        writeReport(r.report + "\n", true);
-      } catch (err) {
-        if (err.cancelled) { cancelled = true; break; }
-        fails++;
-        writeReport(`FAILED: ${f.name}: ${err.message}\n`, true);
-        addOutput({ name: f.name, blob: null, error: err.message });
-      } finally {
-        try { await rpc("rm", { paths: [inP, outP] }); } catch (e) { /* ignore */ }
-      }
-    }
-    if (cancelled) {
-      writeReport(`Batch cancelled. Cleaned ${done.length}/${files.length}.`, true);
-      await afterCancel(true); showResults(); return;
-    }
-    $("#busy-cancel").hidden = true;
-    if (done.length > 1) {
-      const zip = await makeZip(done);
-      const zipName = "cleaned_pdfs.zip";
-      el.outputs.insertBefore(zipRow(zip, zipName), el.outputs.firstChild);
-    }
-    state.batch = null;
-    writeReport(`Batch complete. Successful: ${done.length}/${files.length}. Failed: ${fails}.`, true);
-    setBusy(false, "Batch complete");
-    toast(`Batch complete: ${done.length}/${files.length} cleaned`, fails > 0);
-    showResults();
-  });
-  function zipRow(blob, name) {
-    // reuse addOutput's markup, then move the new row to the top
-    const before = el.outputs.children.length;
-    addOutput({ name, blob, type: "application/zip" });
-    state.outputs.pop();
-    return el.outputs.children[before];
   }
 
   el.copy.addEventListener("click", async () => {
@@ -958,11 +917,13 @@
   /* ------------------------------------------------------------------ *
    * Menu / views                                                       *
    * ------------------------------------------------------------------ */
-  const VIEWS = { home: $("#view-home"), upload: $("#view-upload"), settings: $("#view-settings") };
+  const VIEWS = { home: $("#view-home"), upload: $("#view-upload"), batch: $("#view-batch"), settings: $("#view-settings") };
   const TITLES = { settings: "Settings", single: "Upload a PDF", batch: "Batch Upload" };
   const nav = { view: "home", mode: "single", subTitle: $("#sub-title") };
   function go(view, mode) {
     nav.view = view;
+    if (view !== "upload") setTool(null);
+    if (view === "settings") refreshUc();
     if (mode) nav.mode = mode;
     Object.entries(VIEWS).forEach(([k, n]) => (n.hidden = k !== view));
     el.app.dataset.view = view;
@@ -970,7 +931,9 @@
     el.bar.dataset.mode = nav.mode;
     el.bar.hidden = view !== "upload" || nav.mode !== "batch" || !state.ready;
     el.btnBatch.classList.toggle("main", nav.mode === "batch");
-    nav.subTitle.textContent = view === "settings" ? TITLES.settings : view === "upload" ? TITLES[nav.mode] : "";
+    nav.subTitle.textContent = view === "settings" ? TITLES.settings : view === "batch" ? TITLES.batch : view === "upload" ? TITLES.single : "";
+    if (view === "batch") renderBatch();
+    placeBubble(view);
     syncViewer();
     window.scrollTo(0, 0);
   }
@@ -979,11 +942,30 @@
     VIEWS.upload.dataset.file = on ? "1" : "0";
     document.body.classList.toggle("viewer-open", on);
   }
-  $("#m-upload").addEventListener("click", () => { go("upload", "single"); if (!state.busy) el.fileInput.click(); });
-  $("#m-batch").addEventListener("click", () => go("upload", "batch"));
+  $("#m-upload").addEventListener("click", () => { if (state.busy) return; if (state.file) go("upload", "single"); else el.fileInput.click(); });
+  $("#m-replace").addEventListener("click", () => { if (!state.busy) el.fileInput.click(); });
+  $("#m-delete").addEventListener("click", async () => {
+    if (state.busy || !state.file) return;
+    if (await confirmBox({ title: "Delete this PDF?", text: state.file.name, ok: "Delete" })) await clearFile();
+  });
+  function syncUploadItem() {
+    const f = state.file;
+    $("#m-upload-title").textContent = f ? f.name : "Upload a PDF";
+    $("#m-upload-sub").textContent = f ? [fmtSize(f.size), state.pages ? state.pages + " pages" : "", state.locked ? "unlocked" : ""].filter(Boolean).join(" · ") : "Clean or unlock one file";
+    $("#m-upload .mi use").setAttribute("href", f ? "#i-file" : "#i-upload");
+    $("#m-upload-actions").hidden = !f;
+  }
+  async function clearFile() {
+    const paths = [state.inPath, state.cleanPath].filter(Boolean);
+    try { if (paths.length) await rpc("rm", { paths }); } catch (e) { /* ignore */ }
+    if (state.ucKey) ucDel(state.ucKey);
+    Object.assign(state, { file: null, inPath: null, cleanPath: null, cleanName: null, locked: false, pages: 0, pw: "", unlocked: false, ucKey: null });
+    el.prevImg.hidden = true; el.prevCard.hidden = true; clearOutputs(); setTool(null); syncViewer(); syncUploadItem();
+    toast("PDF deleted");
+  }
+  $("#m-batch").addEventListener("click", () => { if (state.busy) return; if (batch.items.length) go("batch"); else el.batchInput.click(); });
   $("#m-settings").addEventListener("click", () => go("settings"));
   $("#back-btn").addEventListener("click", () => go("home"));
-  el.fileInput.addEventListener("cancel", () => { if (!state.file && nav.view === "upload" && nav.mode === "single") go("home"); });
 
   /* ------------------------------------------------------------------ *
    * Themes + partner accent colors                                     *
@@ -1006,7 +988,7 @@
     soap: [["Aqua", "#0e8f9b", "#0e8f9b", "#2bb3c0"], ["Lavender", "#6d4fd0", "#6d4fd0", "#8b6df0"], ["Mint", "#0b8a63", "#0b8a63", "#22b985"], ["Rose petal", "#c93a6e", "#c93a6e", "#e8609a"], ["Citrus", "#c2680a", "#c2680a", "#e39a1d"]],
     sepia: [["Terracotta", "#b45309", "#b45309", "#d97706"], ["Olive", "#4d7c0f", "#4d7c0f", "#65a30d"], ["Teal", "#0f766e", "#0f766e", "#0d9488"], ["Plum", "#86198f", "#86198f", "#a21caf"], ["Navy", "#1e40af", "#1e40af", "#2563eb"]],
   };
-  const look = { theme: "system", accent: 0 };
+  const look = { theme: "eraser", accent: 0 };
   const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
   const effectiveTheme = () => (look.theme === "system" ? (darkMQ.matches ? "dark" : "light") : look.theme);
   function applyAppearance() {
@@ -1051,11 +1033,23 @@
    * ------------------------------------------------------------------ */
   function openModal(id) {
     const m = $("#" + id);
-    m.hidden = false; document.body.classList.add("modal-open");
+    if (id === "modal-opts") { $("#mo-title").textContent = nav.view === "batch" ? "Batch Options" : "Cleaning Options"; $("#o-actions").hidden = nav.view === "batch"; }
+    if (id === "modal-hf") $("#hf-hide").hidden = nav.view === "batch";
+    if (id === "modal-areas") $("#ar-draw").hidden = nav.view === "batch";
+    m.hidden = false; m._t = Date.now(); document.body.classList.add("modal-open");
     (m.querySelector("[data-close]") || m).focus?.();
   }
-  function closeModal(m) { if (m.hidden) return; m.hidden = true; m.dispatchEvent(new Event("modalclose")); if (!$(".modal:not([hidden])")) document.body.classList.remove("modal-open"); }
-  $$(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m || e.target.closest("[data-close]")) closeModal(m); }));
+  function closeModal(m, opt) {
+    if (m.hidden) return;
+    m.hidden = true; m.dispatchEvent(new Event("modalclose"));
+    const parent = m.dataset.parent;
+    if (parent && !(opt && opt.noParent)) { if (parent === "modal-opts") openOptions(); else openModal(parent); return; }
+    if (!$(".modal:not([hidden])")) document.body.classList.remove("modal-open");
+  }
+  $$(".modal").forEach((m) => m.addEventListener("click", (e) => {
+    if (Date.now() - (m._t || 0) < 350) return;
+    if (e.target === m || e.target.closest("[data-close]")) closeModal(m);
+  }));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const m = $(".modal:not([hidden])"); if (m) closeModal(m); } });
   $("#open-disclaimer").addEventListener("click", () => openModal("modal-disclaimer"));
 
@@ -1064,14 +1058,11 @@
    * Viewer: options sheet, analysis box, bubble, swipe                 *
    * ------------------------------------------------------------------ */
   $("#an-chips-slot").appendChild(el.chips);
-  $("#v-analyze").addEventListener("click", () => el.btnAnalyze.click());
-  $("#viewer-back").addEventListener("click", () => go("home"));
+  $("#viewer-back").addEventListener("click", () => { if (state.itemIdx != null) leaveItem(); else go("home"); });
   $("#an-clean").addEventListener("click", () => { closeModal($("#modal-analysis")); openNameDialog("clean"); });
   $("#an-copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($("#an-report").textContent); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
-  $("#opt-clean").addEventListener("click", () => { closeModal($("#modal-opts")); openNameDialog("clean"); });
-  $("#opt-unlock").addEventListener("click", () => { closeModal($("#modal-opts")); openNameDialog("unlock"); });
 
   (() => { // draggable eraser bubble
     const b = $("#bubble"), host = el.prevCard;
@@ -1085,14 +1076,24 @@
       if (!d) return;
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) moved = true;
       if (!moved) return;
-      const h = host.getBoundingClientRect();
+      const h = b.classList.contains("in-batch") ? { left: 0, top: 0, width: innerWidth, height: innerHeight } : host.getBoundingClientRect();
       const x = Math.min(h.width - b.offsetWidth - 6, Math.max(6, e.clientX - d.ox - h.left));
       const y = Math.min(h.height - b.offsetHeight - 6, Math.max(6, e.clientY - d.oy - h.top));
       Object.assign(b.style, { left: x + "px", top: y + "px", right: "auto", bottom: "auto" });
     });
-    b.addEventListener("pointerup", () => { if (d && !moved && !b.disabled) openOptions(); d = null; });
+    b.addEventListener("pointerup", () => { d = null; });
+    b.addEventListener("click", () => {
+      if (moved) { moved = false; return; }
+      if (b.disabled) return;
+      if (state.hf) { setTool(null); openModal("modal-hf"); return; }
+      if (state.drawing) {
+        setTool(null);
+        if (parseRegionsLenient(el.regions.value).length) openModal("modal-areas"); else openOptions();
+        return;
+      }
+      openOptions();
+    });
     b.addEventListener("pointercancel", () => { d = null; });
-    b.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openOptions(); } });
     window.addEventListener("resize", () => Object.assign(b.style, { left: "", top: "", right: "", bottom: "" }));
   })();
 
@@ -1100,7 +1101,7 @@
     const box = $("#pagebox");
     let s0 = null, dx = 0;
     el.stage.addEventListener("pointerdown", (e) => {
-      if (state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
+      if (e.pointerType === "mouse" || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
       s0 = { x: e.clientX }; dx = 0; box.style.transition = "none";
     });
     el.stage.addEventListener("pointermove", (e) => { if (!s0) return; dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
@@ -1124,9 +1125,9 @@
   function refreshOptStates() {
     const n = (v) => parseFloat(String(v || "0").replace(",", ".")) || 0;
     const t = n(el.top.value), b = n(el.bottom.value);
-    $("#o-hf-s").textContent = state.hf ? "Active. Tap for exact %" : t || b ? "Header " + t + "%, footer " + b + "%" : "Off";
+    $("#o-hf-s").textContent = state.hf ? "Active" : t || b ? "Header " + t + "%, footer " + b + "%" : "Pull the bars on the page";
     const a = parseRegionsLenient(el.regions.value).length;
-    $("#draw-state").textContent = state.drawing ? "Drawing. Tap for areas" : a ? a + (a > 1 ? " areas" : " area") : "Off";
+    $("#draw-state").textContent = state.drawing ? "Active" : a ? a + (a > 1 ? " areas" : " area") : "Draw on the page";
     const tx = [el.header, el.footer].filter((x) => x.value.trim()).length;
     $("#o-text-s").textContent = tx ? tx + " set" : "None";
     const wm = el.watermark.value.split(";").filter((x) => x.trim()).length + (el.xrefs.value.trim() ? 1 : 0) + (el.imgWm.checked ? 1 : 0);
@@ -1136,14 +1137,16 @@
   }
   function openOptions() { refreshOptStates(); openModal("modal-opts"); }
   const optsModal = $("#modal-opts");
-  const viaMenu = (id, fn) => $("#" + id).addEventListener("click", () => { closeModal(optsModal); fn(); });
-  viaMenu("o-hf", () => { if (state.hf) openModal("modal-hf"); else setTool("hf"); });
-  el.draw.addEventListener("click", () => { closeModal(optsModal); if (state.drawing || el.regions.value.trim()) openModal("modal-areas"); else setTool("draw"); });
+  const fresh = () => Date.now() - (optsModal._t || 0) < 400;
+  const viaMenu = (id, fn) => $("#" + id).addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); fn(); });
+  viaMenu("o-hf", () => { if (nav.view === "batch" || state.hf) openModal("modal-hf"); else setTool("hf"); });
+  el.draw.addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); if (nav.view === "batch" || state.drawing || el.regions.value.trim()) openModal("modal-areas"); else setTool("draw"); });
+  $("#o-analyze").addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); el.btnAnalyze.click(); });
   viaMenu("o-text", () => openModal("modal-text"));
   viaMenu("o-wm", () => openModal("modal-wm"));
   viaMenu("o-other", () => openModal("modal-other"));
   $("#hf-hide").addEventListener("click", () => { setTool(null); closeModal($("#modal-hf")); });
-  $("#ar-draw").addEventListener("click", () => { closeModal($("#modal-areas")); setTool("draw"); });
+  $("#ar-draw").addEventListener("click", () => { closeModal($("#modal-areas"), { noParent: true }); setTool("draw"); });
   $("#ar-clear").addEventListener("click", () => { el.regions.value = ""; el.regions.dispatchEvent(new Event("input")); });
 
 
@@ -1172,7 +1175,7 @@
     const err = new Error("Cancelled"); err.cancelled = true;
     try { worker.terminate(); } catch (e) { /* ignore */ }
     pending.forEach((p) => p.reject(err)); pending.clear();
-    startWorker();
+    startWorker(); state.engineGen++;
     try { await rpc("init"); } catch (e) { /* shown on next use */ }
   }
   function cancelJob() {
@@ -1185,12 +1188,446 @@
   $("#busy-cancel").addEventListener("click", cancelJob);
   async function afterCancel(keepBatch) {
     if (state.restartP) await state.restartP;
-    state.cancelled = false;
+    state.cancelled = false; state.batch = null;
+    const wasItem = state.itemIdx != null;
+    state.stash = null;
+    Object.assign(state, { file: null, inPath: null, cleanPath: null, cleanName: null, locked: false, pages: 0, unlocked: false, ucKey: null, pw: "" });
+    if (state.itemMode || wasItem) { state.itemMode = false; state.itemIdx = null; if (state.globalSnap) { applyOptions(state.globalSnap); state.globalSnap = null; } }
+    el.prevImg.hidden = true; setTool(null);
     setBusy(false, "Cancelled");
-    if (keepBatch) { toast("Cancelled"); return; }
-    Object.assign(state, { file: null, inPath: null, cleanPath: null, cleanName: null, locked: false, pages: 0 });
-    el.password.value = ""; el.prevImg.hidden = true; setTool(null); syncViewer(); go("home");
-    toast("Cancelled. Choose the PDF again to retry.");
+    syncViewer(); syncUploadItem();
+    if (keepBatch || wasItem) { go("batch"); toast("Cancelled"); }
+    else { go("home"); toast("Cancelled. Choose the PDF again to retry."); }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Saved unlocked PDFs (IndexedDB, this device only)                  *
+   * ------------------------------------------------------------------ */
+  const UC = { db: null, MAX_N: 3, MAX_BYTES: 150 * MB, MAX_ONE: 60 * MB };
+  const ucReq = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const ucDone = (tx) => new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+  function ucDb() {
+    return new Promise((res, rej) => {
+      if (UC.db) return res(UC.db);
+      const r = indexedDB.open("pdfcleaner-unlocked", 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore("meta", { keyPath: "key" }); r.result.createObjectStore("files", { keyPath: "key" }); };
+      r.onsuccess = () => { UC.db = r.result; res(UC.db); };
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function ucGet(key) {
+    try {
+      const db = await ucDb();
+      const rec = await ucReq(db.transaction("files").objectStore("files").get(key));
+      if (!rec) return null;
+      const ms = db.transaction("meta", "readwrite").objectStore("meta");
+      const m = await ucReq(ms.get(key));
+      if (m) { m.t = Date.now(); ms.put(m); }
+      return rec.buffer;
+    } catch (e) { return null; }
+  }
+  async function ucEvict() {
+    const db = await ucDb();
+    const metas = await ucReq(db.transaction("meta").objectStore("meta").getAll());
+    metas.sort((a, b) => b.t - a.t);
+    let total = 0; const drop = [];
+    metas.forEach((m, i) => { total += m.size; if (i >= UC.MAX_N || total > UC.MAX_BYTES) drop.push(m.key); });
+    if (!drop.length) return;
+    const tx = db.transaction(["meta", "files"], "readwrite");
+    drop.forEach((k) => { tx.objectStore("meta").delete(k); tx.objectStore("files").delete(k); });
+    await ucDone(tx);
+  }
+  async function ucPut(key, name, buffer) {
+    try {
+      if (buffer.byteLength > UC.MAX_ONE) return;
+      const db = await ucDb();
+      const tx = db.transaction(["meta", "files"], "readwrite");
+      tx.objectStore("meta").put({ key, name, size: buffer.byteLength, t: Date.now() });
+      tx.objectStore("files").put({ key, buffer });
+      await ucDone(tx);
+      await ucEvict();
+    } catch (e) { /* ignore */ }
+  }
+  async function ucDel(key) {
+    try {
+      const db = await ucDb();
+      const tx = db.transaction(["meta", "files"], "readwrite");
+      tx.objectStore("meta").delete(key); tx.objectStore("files").delete(key);
+      await ucDone(tx);
+    } catch (e) { /* ignore */ }
+  }
+  async function ucClear() {
+    try {
+      const db = await ucDb();
+      const tx = db.transaction(["meta", "files"], "readwrite");
+      tx.objectStore("meta").clear(); tx.objectStore("files").clear();
+      await ucDone(tx);
+    } catch (e) { /* ignore */ }
+  }
+  async function ucCount() {
+    try { const db = await ucDb(); return await ucReq(db.transaction("meta").objectStore("meta").count()); } catch (e) { return 0; }
+  }
+  async function refreshUc() {
+    const n = await ucCount();
+    $("#uc-label").textContent = n ? "Forget unlocked PDFs (" + n + ")" : "No unlocked PDFs saved";
+    $("#uc-clear").disabled = !n;
+  }
+  $("#uc-clear").addEventListener("click", async () => { await ucClear(); await refreshUc(); toast("Unlocked PDFs forgotten"); });
+  async function saveUnlockedCopy(file, key, path, pw) {
+    try {
+      setStatus("Saving an unlocked copy…");
+      const out = "/in/unlocked/" + safeName(file.name);
+      await rpc("job", { job: { kind: "unlock", input: path, output: out, password: pw } });
+      const got = await rpc("get", { path: out });
+      await rpc("rm", { paths: [path] });
+      state.inPath = out; state.pw = ""; state.unlocked = true; state.ucKey = key;
+      ucPut(key, file.name, got.buffer);
+    } catch (err) {
+      if (err && err.cancelled) throw err;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Analysis summary                                                   *
+   * ------------------------------------------------------------------ */
+  function plannedActions() {
+    const n = (v) => parseFloat(String(v || "0").replace(",", ".")) || 0;
+    const out = [];
+    if (el.meta.checked) out.push("Metadata");
+    if (el.annots.checked) out.push("Annotations");
+    if (el.links.checked) out.push("Links");
+    if (el.extras.checked) out.push("Attachments");
+    if (el.hidden.checked) out.push("Hidden text");
+    if (n(el.top.value)) out.push("Header " + n(el.top.value) + "%");
+    if (n(el.bottom.value)) out.push("Footer " + n(el.bottom.value) + "%");
+    const a = parseRegionsLenient(el.regions.value).length;
+    if (a) out.push(a + (a > 1 ? " areas" : " area"));
+    if (el.header.value.trim()) out.push("Header text");
+    if (el.footer.value.trim()) out.push("Footer text");
+    if (el.watermark.value.trim()) out.push("Watermark text");
+    if (el.imgWm.checked || el.xrefs.value.trim()) out.push("Image watermarks");
+    return out;
+  }
+  function renderAnalysis(text) {
+    const num = (re) => { const m = text.match(re); return m ? Number(m[1]) : null; };
+    const pages = num(/^Pages:\s*(\d+)/m), chars = num(/^Selectable text characters:\s*(\d+)/m);
+    const annots = num(/^Annotations\/stamps:\s*(\d+)/m), links = num(/^Hyperlinks:\s*(\d+)/m), atts = num(/^Embedded attachments:\s*(\d+)/m);
+    const hidden = num(/^Hidden\/tracker text spans:\s*(\d+)/m), mfields = num(/^Standard metadata fields with values:\s*(\d+)/m);
+    const hasMeta = /^XMP metadata:\s*found/im.test(text) || mfields > 0;
+    const images = (text.match(/^\s*XRef \d+:/gm) || []).length;
+    const tiles = [
+      ["Pages", pages == null ? "?" : pages, ""],
+      ["Text characters", chars === 0 ? "None" : chars == null ? "?" : chars.toLocaleString(), chars === 0 ? "warn" : ""],
+      ["Annotations", annots || 0, annots ? "warn" : "ok"],
+      ["Links", links || 0, links ? "warn" : "ok"],
+      ["Attachments", atts || 0, atts ? "warn" : "ok"],
+      ["Metadata", hasMeta ? "Found" : "None", hasMeta ? "warn" : "ok"],
+      ["Hidden text", hidden || 0, hidden ? "warn" : "ok"],
+      ["Images", images, ""],
+    ];
+    const grid = $("#an-grid"); grid.textContent = "";
+    tiles.forEach(([label, value, tone]) => {
+      const t = document.createElement("div"); t.className = "an-tile" + (tone ? " " + tone : "");
+      const b = document.createElement("b"); b.textContent = String(value);
+      const sp = document.createElement("span"); sp.textContent = label;
+      t.append(b, sp); grid.append(t);
+    });
+    $("#an-sub").textContent = state.file ? state.file.name + (pages ? " · " + pages + " pages" : "") : "";
+    const m = text.match(/Configured text phrase scan:\n((?:[ \t]+.*\n?)+)/);
+    const ul = $("#an-matches"); ul.textContent = "";
+    if (m) m[1].split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => { const li = document.createElement("li"); li.textContent = l; ul.append(li); });
+    ul.hidden = !ul.children.length;
+    const plan = $("#an-plan"); plan.textContent = "";
+    const list = plannedActions();
+    (list.length ? list : ["Nothing selected"]).forEach((x) => {
+      const c = document.createElement("span"); c.className = "an-chip" + (list.length ? "" : " none"); c.textContent = x; plan.append(c);
+    });
+  }
+
+
+  /* ------------------------------------------------------------------ *
+   * Batch: list, passwords, per-file options, clean all                *
+   * ------------------------------------------------------------------ */
+  const batch = { items: [], seq: 0 };
+  const SINGLE_FIELDS = ["file", "inPath", "cleanPath", "cleanName", "locked", "unlocked", "ucKey", "pw", "pages", "page", "previewSrc"];
+  const OPT_KEYS = ["top", "bottom", "regions", "header", "footer", "watermark", "imgWm", "xrefs", "meta", "annots", "links", "extras", "hidden"];
+  function snapOptions() { const s = readSettings(); return Object.fromEntries(OPT_KEYS.map((k) => [k, s[k]])); }
+  function applyOptions(o) {
+    el.top.value = o.top; el.bottom.value = o.bottom; el.regions.value = o.regions; el.header.value = o.header; el.footer.value = o.footer;
+    el.watermark.value = o.watermark; el.imgWm.checked = !!o.imgWm; el.xrefs.value = o.xrefs;
+    el.meta.checked = !!o.meta; el.annots.checked = !!o.annots; el.links.checked = !!o.links; el.extras.checked = !!o.extras; el.hidden.checked = !!o.hidden;
+    syncRange(el.top, el.topRange); syncRange(el.bottom, el.bottomRange); renderOverlay(); renderXrefChips();
+  }
+  const sameOpts = (a, b) => OPT_KEYS.every((k) => a[k] === b[k]);
+  function uniqueName(used, name) {
+    let n = name, i = 2;
+    const stem = name.replace(/\.pdf$/i, "");
+    while (used.has(n.toLowerCase())) n = stem + "_" + i++ + ".pdf";
+    used.add(n.toLowerCase());
+    return n;
+  }
+  function passwordCandidates(own, spares) { return [...new Set([own, ...spares].filter(Boolean))]; }
+  const isLocked = (it) => it.locked && !it.unlocked;
+
+  async function loadItem(item) {
+    item.orig = "/in/batch/" + item.id + "_" + safeName(item.name);
+    const cached = await ucGet(item.key);
+    const buf = cached || (await item.file.arrayBuffer());
+    await rpc("put", { path: item.orig, buffer: buf }, [buf]);
+    item.work = item.orig; item.gen = state.engineGen;
+    if (cached) { item.locked = true; item.unlocked = true; return; }
+    const prot = await rpc("protected", { path: item.orig });
+    item.locked = prot.protected; item.unlocked = false;
+  }
+  async function thumbFor(item) {
+    if (isLocked(item)) return;
+    const r = await rpc("preview", { path: item.work, password: "", page: 0, zoom: 0.3 });
+    if (item.thumb) URL.revokeObjectURL(item.thumb);
+    item.thumb = URL.createObjectURL(new Blob([r.png], { type: "image/jpeg" }));
+    item.pages = r.pages;
+  }
+  async function unlockItem(item, pw) {
+    await rpc("preview", { path: item.orig, password: pw, page: 0, zoom: 0.2 });
+    const out = "/in/batch/" + item.id + "_u_" + safeName(item.name);
+    await rpc("job", { job: { kind: "unlock", input: item.orig, output: out, password: pw } });
+    const got = await rpc("get", { path: out });
+    await rpc("rm", { paths: [item.orig] });
+    item.work = out; item.unlocked = true; item.pw = pw;
+    ucPut(item.key, item.name, got.buffer);
+    await thumbFor(item);
+  }
+  async function ensureItem(item) {
+    if (item.gen === state.engineGen) return;
+    const pw = item.pw;
+    await loadItem(item);
+    if (isLocked(item) && pw) await unlockItem(item, pw);
+  }
+
+  async function addBatchFiles(list) {
+    const have = new Set(batch.items.map((i) => i.key));
+    let files = list.filter((f) => isPdf(f) && !/_clean$/i.test(stemOf(f.name)));
+    files = files.filter((f) => !have.has(f.name + "|" + f.size + "|" + f.lastModified));
+    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    if (!files.length) { toast("No new PDFs to add.", true); return; }
+    const tooLarge = files.filter((f) => f.size > MAX_MB * MB);
+    files = files.filter((f) => f.size <= MAX_MB * MB);
+    const total = files.reduce((a, f) => a + f.size, 0) + batch.items.reduce((a, i) => a + i.file.size, 0);
+    if (batch.items.length + files.length > MAX_BATCH_FILES || total > MAX_BATCH_MB * MB) {
+      await confirmBox({ title: "Too many files", text: "Up to " + MAX_BATCH_FILES + " PDFs or " + MAX_BATCH_MB + " MB at a time.", ok: "OK", cancel: null });
+      return;
+    }
+    if ((files.length >= BATCH_FILES || total >= BATCH_MB * MB) && !(await confirmBox({ title: "Large batch", text: files.length + " PDFs (" + fmtSize(total) + "). Adding them may take a while.", ok: "Add" }))) return;
+    setBusy(true, "Adding PDFs…", "Adding PDFs");
+    const failed = [];
+    try {
+      for (let k = 0; k < files.length; k++) {
+        const f = files[k];
+        setStatus((k + 1) + " of " + files.length + ": " + f.name); setProgress((k / files.length) * 100);
+        const it = { id: ++batch.seq, file: f, name: f.name, key: f.name + "|" + f.size + "|" + f.lastModified, pages: 0, locked: false, unlocked: false, pw: "", thumb: "", opts: null, status: "", error: "" };
+        try { await loadItem(it); await thumbFor(it); batch.items.push(it); } catch (err) { if (err.cancelled) throw err; failed.push(f.name); }
+      }
+    } finally { setBusy(false, "Ready"); }
+    renderBatch(); syncBatchItem();
+    if (tooLarge.length || failed.length) toast((tooLarge.length + failed.length) + " file(s) skipped (too large or unreadable).", true);
+    if (batch.items.some(isLocked)) openPasswords();
+  }
+
+  function renderBatch() {
+    const list = $("#batch-list"); list.textContent = "";
+    batch.items.forEach((it, i) => {
+      const li = document.createElement("li"); li.className = "b-item"; li.tabIndex = 0;
+      const num = document.createElement("span"); num.className = "b-num"; num.textContent = String(i + 1);
+      const th = document.createElement("span"); th.className = "b-thumb";
+      if (it.thumb) { const im = document.createElement("img"); im.src = it.thumb; im.alt = ""; th.append(im); }
+      else th.innerHTML = '<svg class="ic"><use href="#i-lock"/></svg>';
+      const info = document.createElement("span"); info.className = "b-info";
+      const nm = document.createElement("b"); nm.textContent = it.name;
+      const sm = document.createElement("small");
+      const bits = [fmtSize(it.file.size)];
+      if (it.pages) bits.push(it.pages + (it.pages === 1 ? " page" : " pages"));
+      let tone = "";
+      if (isLocked(it)) { bits.push("Locked"); tone = "warn"; }
+      else if (it.status === "done") { bits.push("Done"); tone = "ok"; }
+      else if (it.status === "failed") { bits.push("Failed: " + it.error); tone = "warn"; }
+      else if (it.opts) bits.push("Custom options");
+      sm.textContent = bits.join(" · "); if (tone) sm.className = tone;
+      info.append(nm, sm);
+      const x = document.createElement("button"); x.type = "button"; x.className = "b-x"; x.setAttribute("aria-label", "Remove " + it.name);
+      x.innerHTML = '<svg class="ic"><use href="#i-x"/></svg>';
+      x.addEventListener("click", (e) => { e.stopPropagation(); removeItem(i); });
+      li.append(num, th, info, x);
+      li.addEventListener("click", () => openItem(i));
+      li.addEventListener("keydown", (e) => { if (e.key === "Enter") openItem(i); });
+      list.append(li);
+    });
+    const n = batch.items.length, locked = batch.items.filter(isLocked).length;
+    $("#batch-empty").hidden = n > 0;
+    $("#b-clean").disabled = !n || state.busy;
+    $("#b-clean span").textContent = n ? "Clean all (" + n + ")" : "Clean all";
+    $("#b-pw-badge").hidden = !locked; $("#b-pw-badge").textContent = String(locked);
+  }
+  function syncBatchItem() {
+    const n = batch.items.length;
+    $("#m-batch-sub").textContent = n ? n + (n > 1 ? " PDFs" : " PDF") + " · tap to open" : "Clean many files at once";
+  }
+  async function removeItem(i) {
+    const it = batch.items[i]; if (!it || state.busy) return;
+    try { await rpc("rm", { paths: [it.orig, it.work].filter(Boolean) }); } catch (e) { /* ignore */ }
+    if (it.thumb) URL.revokeObjectURL(it.thumb);
+    batch.items.splice(i, 1); renderBatch(); syncBatchItem();
+  }
+  async function clearBatch() {
+    if (state.busy || !batch.items.length) return;
+    if (!(await confirmBox({ title: "Remove all PDFs?", text: batch.items.length + " PDFs will be removed from the batch.", ok: "Remove" }))) return;
+    try { await rpc("rm", { paths: batch.items.flatMap((i) => [i.orig, i.work]).filter(Boolean) }); } catch (e) { /* ignore */ }
+    batch.items.forEach((i) => i.thumb && URL.revokeObjectURL(i.thumb));
+    batch.items = []; renderBatch(); syncBatchItem();
+  }
+
+  /* Open one PDF of the batch in the normal single-PDF viewer */
+  async function openItem(i) {
+    if (state.busy) return;
+    const it = batch.items[i]; if (!it) return;
+    setBusy(true, "Opening " + it.name + "…", "Opening PDF");
+    try {
+      await ensureItem(it);
+      if (isLocked(it)) {
+        setBusy(false, "Password needed");
+        const pw = await askPassword(it.name, (p) => unlockItem(it, p));
+        if (pw === null) { renderBatch(); return; }
+        setBusy(true, "Opening " + it.name + "…", "Opening PDF");
+      }
+      state.stash = Object.fromEntries(SINGLE_FIELDS.map((k) => [k, state[k]]));
+      state.itemIdx = i; state.itemMode = true; state.globalSnap = snapOptions();
+      if (it.opts) applyOptions(it.opts);
+      Object.assign(state, { file: it.file, inPath: it.work, pw: "", pages: it.pages, page: 0, previewSrc: "orig", locked: it.locked, unlocked: !isLocked(it), ucKey: it.key, cleanPath: null, cleanName: null });
+      go("upload", "single");
+      el.prevCard.hidden = false; $("#vt-name").textContent = it.name; syncViewer();
+      setSeg("orig"); el.seg.querySelector('[data-src="clean"]').disabled = true;
+      await loadPreview();
+      setBusy(false, "Ready");
+    } catch (err) {
+      if (err.cancelled) { await afterCancel(true); return; }
+      setBusy(false, "Could not open the PDF"); toast(err.message, true);
+      if (state.itemIdx != null) leaveItem();
+    }
+  }
+  function leaveItem() {
+    const i = state.itemIdx; if (i == null) return;
+    const it = batch.items[i], cur = snapOptions();
+    if (it) it.opts = sameOpts(cur, state.globalSnap) ? null : cur;
+    setTool(null);
+    Object.assign(state, state.stash || {});
+    state.stash = null; state.itemIdx = null; state.itemMode = false;
+    applyOptions(state.globalSnap); state.globalSnap = null;
+    el.prevImg.hidden = true;
+    el.seg.querySelector('[data-src="clean"]').disabled = !state.cleanPath;
+    if (state.file) { setSeg(state.previewSrc || "orig"); loadPreview(); }
+    syncUploadItem(); go("batch");
+  }
+
+  /* Passwords window */
+  function openPasswords() {
+    const locked = batch.items.map((it, i) => ({ it, i })).filter((x) => isLocked(x.it));
+    const list = $("#bpw-list"); list.textContent = "";
+    if (!locked.length) { toast("No locked PDFs."); return; }
+    locked.forEach(({ it, i }) => {
+      const li = document.createElement("li"); li.className = "bpw-row"; li.dataset.id = String(it.id);
+      const num = document.createElement("span"); num.className = "b-num"; num.textContent = String(i + 1);
+      const th = document.createElement("span"); th.className = "b-thumb"; th.innerHTML = '<svg class="ic"><use href="#i-lock"/></svg>';
+      const main = document.createElement("span"); main.className = "bpw-main";
+      const nm = document.createElement("span"); nm.textContent = it.name;
+      const inp = document.createElement("input"); inp.type = $("#bpw-show").checked ? "text" : "password"; inp.placeholder = "Password for #" + (i + 1); inp.autocomplete = "off"; inp.autocapitalize = "off"; inp.spellcheck = false;
+      const st = document.createElement("small"); st.textContent = "Locked";
+      main.append(nm, inp, st); li.append(num, th, main); list.append(li);
+    });
+    openModal("modal-bpw");
+  }
+  function addSpareSlot() {
+    const row = document.createElement("div"); row.className = "bpw-slot";
+    const plus = document.createElement("span"); plus.className = "b-num"; plus.textContent = "+";
+    const inp = document.createElement("input"); inp.type = $("#bpw-show").checked ? "text" : "password"; inp.placeholder = "Extra password"; inp.autocomplete = "off"; inp.autocapitalize = "off"; inp.spellcheck = false;
+    const x = document.createElement("button"); x.type = "button"; x.className = "b-x"; x.setAttribute("aria-label", "Remove password"); x.innerHTML = '<svg class="ic"><use href="#i-x"/></svg>';
+    x.addEventListener("click", () => row.remove());
+    row.append(plus, inp, x); $("#bpw-spare").append(row); inp.focus();
+  }
+  $("#bpw-add").addEventListener("click", addSpareSlot);
+  $("#bpw-show").addEventListener("change", (e) => { $$("#modal-bpw input[type=password], #modal-bpw input[type=text]").forEach((i) => { if (i.id !== "bpw-show") i.type = e.target.checked ? "text" : "password"; }); });
+  $("#bpw-ok").addEventListener("click", async () => {
+    if (state.busy) return;
+    const btn = $("#bpw-ok"); btn.disabled = true;
+    const spares = $$("#bpw-spare input").map((i) => i.value);
+    try {
+      for (const row of $$("#bpw-list .bpw-row")) {
+        const it = batch.items.find((x) => String(x.id) === row.dataset.id); if (!it || !isLocked(it)) continue;
+        const st = row.querySelector("small"), cands = passwordCandidates(row.querySelector("input").value, spares);
+        if (!cands.length) { st.textContent = "Enter a password"; st.className = "bad"; continue; }
+        st.textContent = "Checking…"; st.className = "";
+        await ensureItem(it);
+        let ok = false;
+        for (const pw of cands) { try { await unlockItem(it, pw); ok = true; break; } catch (e) { if (e.cancelled) throw e; } }
+        st.textContent = ok ? "Unlocked" : "Wrong password"; st.className = ok ? "ok" : "bad";
+        if (ok) row.querySelector("input").disabled = true;
+      }
+    } finally { btn.disabled = false; renderBatch(); }
+    if (!batch.items.some(isLocked)) { closeModal($("#modal-bpw")); toast("All PDFs unlocked"); }
+  });
+  $("#b-pw").addEventListener("click", () => { if (!state.busy) openPasswords(); });
+  $("#b-add").addEventListener("click", () => { if (!state.busy) el.batchInput.click(); });
+  $("#b-clear").addEventListener("click", clearBatch);
+  el.batchInput.addEventListener("change", () => { const files = [...el.batchInput.files]; el.batchInput.value = ""; if (files.length) { go("batch"); addBatchFiles(files); } });
+
+  /* Clean all */
+  $("#b-clean").addEventListener("click", async () => {
+    if (state.busy || !batch.items.length) return;
+    const locked = batch.items.filter(isLocked).length;
+    if (locked && await confirmBox({ title: "Locked PDFs", text: locked + " PDF" + (locked > 1 ? "s are" : " is") + " still locked.", ok: "Enter passwords", cancel: "Skip them" })) { openPasswords(); return; }
+    openNameDialog("batch");
+  });
+  async function runBatch(suffix, folder) {
+    const snap = snapOptions(), targets = batch.items.filter((it) => !isLocked(it));
+    if (!targets.length) { toast("No unlocked PDFs to clean.", true); return; }
+    state.itemMode = true; state.globalSnap = snap;
+    try { targets.forEach((it) => { applyOptions(it.opts || snap); getOptions(); }); }
+    catch (e) { state.itemMode = false; state.globalSnap = null; applyOptions(snap); toast(e.message, true); return; }
+    setBusy(true, "Cleaning…", "Batch cleaning", batchNote(targets.map((t) => t.file)));
+    startEta(0);
+    const used = new Set(); let ok = 0, cancelled = false; const fails = [];
+    for (let k = 0; k < targets.length; k++) {
+      const it = targets[k];
+      state.batch = { i: k + 1, n: targets.length };
+      el.ovlTitle.textContent = "Cleaning PDF " + (k + 1) + " of " + targets.length;
+      setStatus(it.name);
+      try {
+        await ensureItem(it);
+        applyOptions(it.opts || snap);
+        const opts = getOptions();
+        const outName = uniqueName(used, safeName(stemOf(it.name) + suffix + ".pdf"));
+        const outP = "/out/batch/" + it.id + "/" + outName;
+        await rpc("job", { job: { kind: "clean", input: it.work, output: outP, password: "", options: opts } });
+        const got = await rpc("get", { path: outP });
+        await rpc("rm", { paths: [outP] });
+        await saveBlob(new Blob([got.buffer], { type: "application/pdf" }), outName, true);
+        it.status = "done"; it.error = ""; ok++;
+      } catch (err) {
+        if (err.cancelled) { cancelled = true; break; }
+        it.status = "failed"; it.error = err.message; fails.push(it.name);
+      }
+    }
+    if (cancelled) { await afterCancel(true); renderBatch(); return; }
+    state.itemMode = false; state.globalSnap = null; applyOptions(snap); state.batch = null;
+    $("#busy-cancel").hidden = true;
+    setBusy(false, "Done"); renderBatch();
+    await confirmBox({ title: ok + " of " + targets.length + " saved", text: fails.length ? "Failed: " + fails.slice(0, 3).join(", ") + (fails.length > 3 ? " and " + (fails.length - 3) + " more" : "") : "Saved to " + folder + ".", ok: "OK", cancel: null });
+  }
+
+  /* The options icon lives in the viewer; in the batch view it floats over the list */
+  function placeBubble(view) {
+    const b = $("#bubble"), inBatch = view === "batch";
+    if (inBatch === b.classList.contains("in-batch")) return;
+    (inBatch ? VIEWS.batch : el.prevCard).appendChild(b);
+    b.classList.toggle("in-batch", inBatch);
+    Object.assign(b.style, { left: "", top: "", right: "", bottom: "" });
   }
 
   /* Android back button (called from native) */
@@ -1198,7 +1635,7 @@
     if (state.busy) return true;
     const m = $(".modal:not([hidden])");
     if (m) { closeModal(m); return true; }
-    if (state.drawing || state.hf) { setTool(null); return true; }
+    if (state.itemIdx != null) { leaveItem(); return true; }
     if (nav.view !== "home") { go("home"); return true; }
     return false;
   };

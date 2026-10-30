@@ -95,6 +95,9 @@ const handlers = {
     copy.set(png);
     return { __transfer: [copy.buffer], png: copy.buffer, pages: js.pages, page: js.page, w: js.w, h: js.h };
   },
+  words({ path, password, page }) {
+    return { json: eng.page_text_lines(path, password || "", page || 0) };
+  },
   job({ job }) {
     eng.close_preview_cache();
     const out = eng.run_job(JSON.stringify(job));
