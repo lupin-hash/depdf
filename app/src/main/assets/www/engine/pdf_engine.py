@@ -1318,15 +1318,26 @@ def _preview_doc(path: str, password: str = ""):
     return _PREVIEW["doc"]
 
 
-def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float = 1.2) -> dict:
-    """Render one page to JPEG bytes for the on-screen preview (key kept as "png")."""
+def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float = 1.2, clip: str = "") -> dict:
+    """Render one page (or a clipped region, given as "x0,y0,x1,y1" page fractions) to JPEG bytes."""
     doc = _preview_doc(path, password)
     count = len(doc)
     page_index = max(0, min(int(page_index), count - 1))
     page = doc[page_index]
     w, h = page.rect.width, page.rect.height
-    z = min(float(zoom), 2400.0 / max(w, h, 1.0))
-    pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+    region = None
+    if clip:
+        try:
+            fx0, fy0, fx1, fy1 = [float(v) for v in str(clip).split(",")]
+            r = page.rect
+            region = fitz.Rect(r.x0 + fx0 * r.width, r.y0 + fy0 * r.height, r.x0 + fx1 * r.width, r.y0 + fy1 * r.height) & r
+            if region.is_empty:
+                region = None
+        except Exception:
+            region = None
+    span = max(region.width, region.height) if region else max(w, h)
+    z = min(float(zoom), 2400.0 / max(span, 1.0))
+    pix = page.get_pixmap(matrix=fitz.Matrix(z, z), clip=region, alpha=False)
     return {"png": pix.tobytes("jpeg", jpg_quality=85), "pages": count, "page": page_index, "w": w, "h": h}
 
 

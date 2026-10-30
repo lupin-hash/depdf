@@ -529,3 +529,12 @@ html.lite .modal, html.lite .busy { background: color-mix(in srgb, var(--bg) 90%
 html.lite body::before { display: none; }
 html.lite .bubble.active, html.lite .hf-pill > span { animation: none; }
 html.lite .pagebox, html.lite .modal-card { transition: none; animation: none; }
+
+/* ---- Pinch zoom ---- */
+.zoomwrap { position: absolute; inset: 0; display: grid; place-items: center; transform-origin: 0 0; }
+.hires { position: absolute; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.hires[hidden] { display: none; }
+.overlay .rx { transform: scale(calc(1 / var(--zs, 1))); transform-origin: top right; }
+.hf-handle::before { height: calc(3px / var(--zs, 1)); }
+.hf-handle.t .hf-pill { transform: translateX(-50%) scale(calc(1 / var(--zs, 1))); transform-origin: 50% 0; }
+.hf-handle.f .hf-pill { transform: translateX(-50%) scale(calc(1 / var(--zs, 1))); transform-origin: 50% 100%; }

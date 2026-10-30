@@ -109,15 +109,16 @@
           </div>
         </div>
         <div class="stage" id="stage">
-          <div class="pagebox" id="pagebox">
+          <div class="zoomwrap" id="zoomwrap"><div class="pagebox" id="pagebox">
             <img id="prev-img" alt="Page preview" draggable="false" hidden>
+            <img class="hires" id="hires" alt="" draggable="false" hidden>
             <div class="textlayer" id="textlayer"></div>
             <div class="overlay" id="overlay" aria-hidden="true"></div>
             <div class="hf" id="hf" hidden>
               <div class="hf-handle t" id="hf-t" aria-label="Header size"><span class="hf-pill"><span><svg class="ic"><use href="#i-chevron"/></svg></span><span><svg class="ic"><use href="#i-chevron"/></svg></span></span></div>
               <div class="hf-handle f" id="hf-f" aria-label="Footer size"><span class="hf-pill"><span><svg class="ic" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg></span><span><svg class="ic" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg></span></span></div>
             </div>
-          </div>
+          </div></div>
           <div class="stage-msg" id="stage-msg"></div>
           <button class="vnav prev" id="pg-prev" type="button" aria-label="Previous page" disabled><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
           <button class="vnav next" id="pg-next" type="button" aria-label="Next page" disabled><svg class="ic" style="transform:rotate(-90deg)"><use href="#i-chevron"/></svg></button>

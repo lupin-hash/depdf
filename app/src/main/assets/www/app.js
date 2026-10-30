@@ -512,6 +512,8 @@
       el.pgPrev.disabled = r.page <= 0; el.pgNext.disabled = r.page >= r.pages - 1;
       el.draw.disabled = state.previewSrc === "clean";
       renderOverlay();
+      if (state.shownPage !== r.page) { zoomG.reset(); state.shownPage = r.page; }
+      zoomG.refresh();
       loadTextLayer(path, pw, r.page, token);
     } catch (err) {
       if (token !== state.previewToken) return;
@@ -631,6 +633,7 @@
     };
     el.stage.addEventListener("pointerup", end);
     el.stage.addEventListener("pointercancel", () => { start = null; live = null; renderOverlay(); });
+    el.stage.addEventListener("pinchstart", () => { if (live) live.remove(); start = null; live = null; });
   })();
 
   /* ------------------------------------------------------------------ *
@@ -968,6 +971,7 @@
   const nav = { view: "home", mode: "single", subTitle: $("#sub-title") };
   function go(view, mode) {
     nav.view = view;
+    if (zoomG.reset) zoomG.reset();
     if (view !== "upload") setTool(null);
     if (view === "settings") refreshUc();
     if (mode) nav.mode = mode;
@@ -1143,11 +1147,151 @@
     window.addEventListener("resize", () => Object.assign(b.style, { left: "", top: "", right: "", bottom: "" }));
   })();
 
+  /* ------------------------------------------------------------------ *
+   * Pinch zoom, pan and double-tap on the preview                      *
+   * ------------------------------------------------------------------ */
+  const zoomG = { s: 1, tx: 0, ty: 0, pinch: false, reset: null, refresh: null };
+  /* keep the page on screen: centred when smaller than the stage, edge-limited when larger */
+  function zoomClamp(s, tx, ty, d) {
+    const cw = s * d.bw, ch = s * d.bh;
+    const x = cw <= d.W ? (d.W - cw) / 2 - s * d.bx : Math.min(-s * d.bx, Math.max(d.W - cw - s * d.bx, tx));
+    const y = ch <= d.H ? (d.H - ch) / 2 - s * d.by : Math.min(-s * d.by, Math.max(d.H - ch - s * d.by, ty));
+    return [x, y];
+  }
+  /* new translation that keeps the content point under the start midpoint under the current midpoint */
+  function pinchTo(g, s, mx, my) { const k = s / g.s0; return [mx - (g.mx - g.tx0) * k, my - (g.my - g.ty0) * k]; }
+  (() => {
+    const stage = el.stage, wrap = $("#zoomwrap"), box = $("#pagebox"), hires = $("#hires");
+    const MAX = 5, ptrs = new Map();
+    let g = null, lastTap = null, hiT = 0, hiBusy = false, hiAgain = false, hiUrl = "";
+    const dims = () => ({ W: stage.clientWidth, H: stage.clientHeight, bx: box.offsetLeft, by: box.offsetTop, bw: box.offsetWidth, bh: box.offsetHeight });
+    const dist = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+    const mid = () => { const [a, b] = [...ptrs.values()]; const r = stage.getBoundingClientRect(); return [(a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top]; };
+    const local = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+
+    function apply(s, tx, ty, smooth) {
+      [tx, ty] = zoomClamp(s, tx, ty, dims());
+      zoomG.s = s; zoomG.tx = tx; zoomG.ty = ty;
+      wrap.style.transition = smooth ? "transform .2s ease-out" : "none";
+      wrap.style.transform = s === 1 && Math.abs(tx) < 0.5 && Math.abs(ty) < 0.5 ? "" : "translate(" + tx + "px, " + ty + "px) scale(" + s + ")";
+      wrap.style.setProperty("--zs", String(s));
+      stage.classList.toggle("zoomed", s > 1.02);
+      scheduleHires();
+    }
+    zoomG.reset = () => { g = null; ptrs.clear(); zoomG.pinch = false; apply(1, 0, 0, false); hideHires(); };
+    zoomG.refresh = () => { hideHires(); scheduleHires(); };
+
+    /* sharp tile of just the visible part, so text stays crisp when zoomed in */
+    function hideHires() { clearTimeout(hiT); hires.hidden = true; hires.removeAttribute("src"); if (hiUrl) { URL.revokeObjectURL(hiUrl); hiUrl = ""; } }
+    function scheduleHires() { clearTimeout(hiT); if (zoomG.s <= 1.25) { hideHires(); return; } hiT = setTimeout(renderHires, 260); }
+    async function renderHires() {
+      if (state.busy || el.prevImg.hidden) return;
+      if (hiBusy) { hiAgain = true; return; }
+      hiBusy = true;
+      try {
+        do {
+          hiAgain = false;
+          const path = state.previewSrc === "clean" ? state.cleanPath : state.inPath;
+          if (!path || zoomG.s <= 1.25) break;
+          const pw = state.previewSrc === "orig" ? state.pw : "";
+          const sr = stage.getBoundingClientRect(), ir = el.prevImg.getBoundingClientRect();
+          if (!ir.width || !ir.height) break;
+          let fx0 = (sr.left - ir.left) / ir.width, fy0 = (sr.top - ir.top) / ir.height;
+          let fx1 = (sr.right - ir.left) / ir.width, fy1 = (sr.bottom - ir.top) / ir.height;
+          const mx = (fx1 - fx0) * 0.08, my = (fy1 - fy0) * 0.08;
+          fx0 = Math.max(0, fx0 - mx); fy0 = Math.max(0, fy0 - my); fx1 = Math.min(1, fx1 + mx); fy1 = Math.min(1, fy1 + my);
+          if (fx1 - fx0 < 0.02 || fy1 - fy0 < 0.02) break;
+          const page = state.page, tok = state.previewToken;
+          const target = Math.min(2000, Math.max(stage.clientWidth, stage.clientHeight) * Math.min(window.devicePixelRatio || 1, 2));
+          const z = target / Math.max((fx1 - fx0) * state.pageW, (fy1 - fy0) * state.pageH, 1);
+          const r = await rpc("preview", { path, password: pw, page, zoom: z, clip: [fx0, fy0, fx1, fy1].map((v) => v.toFixed(4)).join(",") });
+          if (page !== state.page || tok !== state.previewToken || zoomG.s <= 1.25) continue;
+          const url = URL.createObjectURL(new Blob([r.png], { type: "image/jpeg" }));
+          Object.assign(hires.style, { left: fx0 * 100 + "%", top: fy0 * 100 + "%", width: (fx1 - fx0) * 100 + "%", height: (fy1 - fy0) * 100 + "%" });
+          hires.src = url; hires.hidden = false;
+          const old = hiUrl; hiUrl = url; if (old) setTimeout(() => URL.revokeObjectURL(old), 1500);
+        } while (hiAgain);
+      } catch (e) { /* the normal preview stays */ } finally { hiBusy = false; }
+    }
+
+    stage.addEventListener("pointerdown", (e) => {
+      if (el.prevImg.hidden || e.target.closest(".hf-handle, .rx, .vnav")) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: performance.now() });
+      if (ptrs.size === 2) {
+        zoomG.pinch = true; stage.dispatchEvent(new Event("pinchstart"));
+        const [mx, my] = mid();
+        g = { type: "pinch", d0: dist(), s0: zoomG.s, tx0: zoomG.tx, ty0: zoomG.ty, mx, my };
+      } else if (ptrs.size === 1 && zoomG.s > 1.02 && !state.drawing && e.pointerType !== "mouse") {
+        g = { type: "pan", id: e.pointerId, x0: e.clientX, y0: e.clientY, tx0: zoomG.tx, ty0: zoomG.ty, moved: false };
+      }
+    }, true);
+    stage.addEventListener("pointermove", (e) => {
+      const p = ptrs.get(e.pointerId); if (!p) return;
+      p.x = e.clientX; p.y = e.clientY;
+      if (!g) return;
+      if (g.type === "pinch" && ptrs.size >= 2) {
+        const s = Math.min(MAX, Math.max(1, (g.s0 * dist()) / g.d0));
+        const [mx, my] = mid(), [tx, ty] = pinchTo(g, s, mx, my);
+        apply(s, tx, ty, false);
+      } else if (g.type === "pan" && g.id === e.pointerId) {
+        const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+        if (!g.moved && Math.hypot(dx, dy) < 6) return;
+        g.moved = true; apply(zoomG.s, g.tx0 + dx, g.ty0 + dy, false);
+      }
+    }, true);
+    const up = (e) => {
+      const p = ptrs.get(e.pointerId); if (!p) return;
+      const wasOnly = ptrs.size === 1, moved = Math.hypot(e.clientX - p.x0, e.clientY - p.y0);
+      ptrs.delete(e.pointerId);
+      if (g && g.type === "pinch") {
+        if (ptrs.size < 2) {
+          zoomG.pinch = false;
+          if (zoomG.s < 1.05) apply(1, 0, 0, true);
+          const rest = [...ptrs.entries()][0];
+          g = rest && zoomG.s > 1.02 ? { type: "pan", id: rest[0], x0: rest[1].x, y0: rest[1].y, tx0: zoomG.tx, ty0: zoomG.ty, moved: true } : null;
+        }
+        return;
+      }
+      if (g && g.type === "pan" && g.id === e.pointerId) g = null;
+      /* double tap: toggle between fit and 2.5x at the tap point */
+      if (wasOnly && e.type === "pointerup" && e.pointerType !== "mouse" && !state.drawing && moved < 10 && performance.now() - p.t < 300) {
+        const now = performance.now();
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+          lastTap = null;
+          if (zoomG.s > 1.2) apply(1, 0, 0, true);
+          else { const [px, py] = local(e), k = 2.5 / zoomG.s; apply(2.5, px - (px - zoomG.tx) * k, py - (py - zoomG.ty) * k, true); }
+        } else lastTap = { t: now, x: e.clientX, y: e.clientY };
+      }
+    };
+    stage.addEventListener("pointerup", up, true);
+    stage.addEventListener("pointercancel", up, true);
+
+    /* computer: Ctrl + wheel zooms, wheel pans when zoomed, + / - / 0 keys */
+    stage.addEventListener("wheel", (e) => {
+      if (el.prevImg.hidden) return;
+      const [px, py] = local(e);
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const s = Math.min(MAX, Math.max(1, zoomG.s * Math.exp(-e.deltaY * 0.01))), k = s / zoomG.s;
+        apply(s, px - (px - zoomG.tx) * k, py - (py - zoomG.ty) * k, false);
+      } else if (zoomG.s > 1.02) { e.preventDefault(); apply(zoomG.s, zoomG.tx - e.deltaX, zoomG.ty - e.deltaY, false); }
+    }, { passive: false });
+    document.addEventListener("keydown", (e) => {
+      if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])") || el.prevImg.hidden) return;
+      const c = [stage.clientWidth / 2, stage.clientHeight / 2];
+      const zoomTo = (s) => { s = Math.min(MAX, Math.max(1, s)); const k = s / zoomG.s; apply(s, c[0] - (c[0] - zoomG.tx) * k, c[1] - (c[1] - zoomG.ty) * k, true); };
+      if (e.key === "+" || e.key === "=") zoomTo(zoomG.s * 1.4);
+      else if (e.key === "-") zoomTo(zoomG.s / 1.4);
+      else if (e.key === "0") zoomG.reset();
+    });
+    window.addEventListener("resize", () => apply(zoomG.s, zoomG.tx, zoomG.ty, false));
+  })();
+
   (() => { // swipe left / right to change pages
     const box = $("#pagebox");
     let s0 = null, dx = 0;
     el.stage.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
+      if (e.pointerType === "mouse" || zoomG.s > 1.02 || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
       s0 = { x: e.clientX }; dx = 0; box.style.transition = "none";
     });
     el.stage.addEventListener("pointermove", (e) => { if (!s0) return; dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
@@ -1160,6 +1304,7 @@
     };
     el.stage.addEventListener("pointerup", end);
     el.stage.addEventListener("pointercancel", end);
+    el.stage.addEventListener("pinchstart", () => { s0 = null; dx = 0; box.style.transition = ""; box.style.transform = ""; });
     document.addEventListener("keydown", (e) => {
       if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])")) return;
       if (e.key === "ArrowRight") el.pgNext.click(); else if (e.key === "ArrowLeft") el.pgPrev.click();

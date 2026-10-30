@@ -86,8 +86,8 @@ const handlers = {
   protected({ path }) {
     return { protected: !!eng.is_protected(path) };
   },
-  preview({ path, password, page, zoom }) {
-    const res = eng.preview_pdf(path, password || "", page || 0, zoom || 1.4);
+  preview({ path, password, page, zoom, clip }) {
+    const res = eng.preview_pdf(path, password || "", page || 0, zoom || 1.4, clip || "");
     const js = res.toJs({ dict_converter: Object.fromEntries });
     res.destroy();
     const png = js.png instanceof Uint8Array ? js.png : new Uint8Array(js.png);
