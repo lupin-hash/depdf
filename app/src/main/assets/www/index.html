@@ -112,7 +112,7 @@
           <div class="zoomwrap" id="zoomwrap"><div class="pagebox" id="pagebox">
             <img id="prev-img" alt="Page preview" draggable="false" hidden>
             <img class="hires" id="hires" alt="" draggable="false" hidden>
-            <div class="textlayer" id="textlayer"></div>
+            <div class="selhl" id="selhl"><div id="selrects"></div></div>
             <div class="overlay" id="overlay" aria-hidden="true"></div>
             <div class="hf" id="hf" hidden>
               <div class="hf-handle t" id="hf-t" aria-label="Header size"><span class="hf-pill"><span><svg class="ic"><use href="#i-chevron"/></svg></span><span><svg class="ic"><use href="#i-chevron"/></svg></span></span></div>
@@ -122,6 +122,9 @@
           <div class="stage-msg" id="stage-msg"></div>
           <button class="vnav prev" id="pg-prev" type="button" aria-label="Previous page" disabled><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
           <button class="vnav next" id="pg-next" type="button" aria-label="Next page" disabled><svg class="ic" style="transform:rotate(-90deg)"><use href="#i-chevron"/></svg></button>
+        </div>
+        <div class="sel-bar" id="selbar" hidden role="toolbar" aria-label="Text selection">
+          <button id="sel-copy" type="button">Copy</button><button id="sel-line" type="button">Line</button><button id="sel-all" type="button">All</button><button id="sel-done" type="button">Done</button>
         </div>
         <button class="bubble" id="bubble" type="button" aria-label="Cleaning options"><svg class="ic"><use href="#i-eraser"/></svg><svg class="art art-eraser" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="eb-clip"><rect x="6" y="14" width="60" height="28" rx="7"/></clipPath></defs><g transform="rotate(-22 36 28)"><rect x="6" y="17" width="60" height="28" rx="7" fill="#000" opacity=".15"/><g clip-path="url(#eb-clip)"><rect x="6" y="14" width="60" height="28" fill="#f06a98"/><rect x="6" y="34" width="60" height="8" fill="#d8467c"/><rect x="38" y="14" width="30" height="28" fill="#2f5fd0"/><rect x="38" y="14" width="30" height="8" fill="#4b7be8"/><rect x="36" y="14" width="3" height="28" fill="#fff"/><rect x="50" y="14" width="2" height="28" fill="#fff" opacity=".7"/></g><rect x="6" y="14" width="60" height="28" rx="7" fill="none" stroke="#2b2b33" stroke-opacity=".35" stroke-width="1.5"/><path d="M12 20h18" stroke="#fff" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/></g><circle cx="12" cy="50" r="2" fill="#e0457b"/><circle cx="20" cy="53" r="1.5" fill="#6b7280"/><circle cx="5" cy="46" r="1.5" fill="#6b7280"/></svg><svg class="art art-sponge" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="sp-clip"><rect x="8" y="14" width="56" height="30" rx="9"/></clipPath></defs><g transform="rotate(-10 36 29)"><rect x="8" y="17" width="56" height="30" rx="9" fill="#000" opacity=".15"/><g clip-path="url(#sp-clip)"><rect x="8" y="14" width="56" height="30" fill="#f7d54d"/><rect x="8" y="34" width="56" height="10" fill="#34a56a"/><rect x="8" y="33" width="56" height="2" fill="#2a8a58"/><ellipse cx="18" cy="21" rx="3.2" ry="2.4" fill="#e2b72a"/><ellipse cx="30" cy="27" rx="2.4" ry="1.8" fill="#e2b72a"/><ellipse cx="42" cy="20" rx="3.6" ry="2.6" fill="#e2b72a"/><ellipse cx="54" cy="26" rx="3" ry="2.2" fill="#e2b72a"/><ellipse cx="24" cy="30" rx="1.8" ry="1.4" fill="#e2b72a"/><ellipse cx="48" cy="30" rx="2" ry="1.5" fill="#e2b72a"/><circle cx="16" cy="39" r="1" fill="#278a56"/><circle cx="27" cy="41" r="1" fill="#278a56"/><circle cx="38" cy="38" r="1" fill="#278a56"/><circle cx="49" cy="41" r="1" fill="#278a56"/><circle cx="58" cy="38" r="1" fill="#278a56"/></g><rect x="8" y="14" width="56" height="30" rx="9" fill="none" stroke="#6b5b0f" stroke-opacity=".35" stroke-width="1.5"/><path d="M15 20h16" stroke="#fff" stroke-opacity=".6" stroke-width="3" stroke-linecap="round"/></g></svg></button>
       </section>
@@ -150,7 +153,6 @@
     </div>
     <p class="b-empty" id="batch-empty">No PDFs yet. Tap Add PDFs.</p>
     <ol class="batch-list" id="batch-list"></ol>
-    <div class="batch-bar"><button class="btn primary big" id="b-clean" type="button" disabled><svg class="ic"><use href="#i-sparkles"/></svg><span>Clean all</span></button></div>
   </section>
 
   <section id="view-settings" hidden>
@@ -255,18 +257,22 @@
   </div>
 </div>
 
-<div class="modal" id="modal-bpw" role="dialog" aria-modal="true" aria-labelledby="mbp-title" hidden>
-  <div class="modal-card wide">
-    <div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="mbp-title">Passwords</h2></div>
-    <p class="hint">Type each password next to its number.</p>
-    <ol class="bpw-list" id="bpw-list"></ol>
-    <div class="bpw-spare" id="bpw-spare"></div>
-    <button class="btn ghost sm" id="bpw-add" type="button"><svg class="ic"><use href="#i-plus"/></svg><span>Add password</span></button>
-    <p class="hint">An added password is tried on every locked PDF.</p>
-    <label class="switch"><input type="checkbox" id="bpw-show"><span class="track"></span><span class="txt"><b>Show passwords</b></span></label>
-    <div class="modal-actions">
-      <button class="btn ghost" type="button" data-close>Close</button>
-      <button class="btn primary" id="bpw-ok" type="button"><svg class="ic"><use href="#i-unlock"/></svg><span>Unlock</span></button>
+<div class="modal sheet-modal" id="modal-bpw" role="dialog" aria-modal="true" aria-labelledby="mbp-title" hidden>
+  <div class="modal-card sheet">
+    <div class="sheet-head"><div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="mbp-title">Passwords</h2></div></div>
+    <div class="sheet-body">
+      <p class="hint">Same password? Paste it below. Different ones? Type each next to its number.</p>
+      <ol class="bpw-list" id="bpw-list"></ol>
+      <div class="bpw-spare" id="bpw-spare"></div>
+      <button class="btn ghost sm" id="bpw-add" type="button"><svg class="ic"><use href="#i-plus"/></svg><span>Add another password</span></button>
+      <label class="switch"><input type="checkbox" id="bpw-show"><span class="track"></span><span class="txt"><b>Show passwords</b></span></label>
+    </div>
+    <div class="bpw-bottom">
+      <div class="bpw-type">
+        <input id="bpw-all" type="password" placeholder="Same password for all PDFs" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn ghost sm" id="bpw-paste" type="button">Paste</button>
+      </div>
+      <button class="btn primary" id="bpw-ok" type="button"><svg class="ic"><use href="#i-unlock"/></svg><span>Unlock all</span></button>
     </div>
   </div>
 </div>

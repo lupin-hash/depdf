@@ -159,7 +159,7 @@
   function setBusy(busy, status, title, note) {
     state.busy = busy;
     if (!busy) state.batch = null;
-    [el.btnAnalyze, el.btnClean, el.btnBatch, el.btnUnlock, $("#o-analyze"), $("#bubble"), $("#b-clean"), $("#b-add"), $("#b-pw")].forEach((b) => (b.disabled = busy));
+    [el.btnAnalyze, el.btnClean, el.btnBatch, el.btnUnlock, $("#o-analyze"), $("#bubble"), $("#b-add"), $("#b-pw")].forEach((b) => (b.disabled = busy));
     el.busyBar.hidden = !busy;
     if (busy) showOverlay(title, note); else hideOverlay();
     if (status) setStatus(status);
@@ -414,71 +414,176 @@
   el.pgPrev.addEventListener("click", () => { if (state.page > 0) { state.page--; loadPreview(); } });
   el.pgNext.addEventListener("click", () => { if (state.page < state.pages - 1) { state.page++; loadPreview(); } });
 
-  /* Copyable text laid over the preview image: every word sits at its own position */
-  let textLines = [], layoutGen = 0, layoutRaf = 0, measureCtx = null;
-  const eoc = document.createElement("div"); eoc.className = "eoc";
-  function resetTextDom() { const tl = $("#textlayer"); tl.textContent = ""; tl.append(eoc); return tl; }
-  function clearTextLayer() { layoutGen++; textLines = []; resetTextDom(); }
-  document.addEventListener("selectionchange", () => {
-    const sel = document.getSelection(), tl = $("#textlayer");
-    const on = !!sel && sel.rangeCount > 0 && !sel.isCollapsed && tl.contains(sel.anchorNode);
-    zoomG.selecting = on; tl.classList.toggle("sel", on);
-  });
-  function naturalWidth(w) {
-    if (w.nw) return w.nw;
-    measureCtx = measureCtx || document.createElement("canvas").getContext("2d");
-    measureCtx.font = "100px sans-serif";
-    w.nw = (measureCtx.measureText(w[4]).width || 1) / 100;
-    return w.nw;
+  /* ------------------------------------------------------------------ *
+   * Text selection: our own, so the highlight stays exactly where you  *
+   * point. Words come in reading order; the nearest word to the finger *
+   * wins, never the top of the page.                                   *
+   * ------------------------------------------------------------------ */
+  function selNearest(words, fx, fy, W, H, maxPx, zoom) {
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const dx = Math.max(w[0] - fx, 0, fx - w[2]) * W, dy = Math.max(w[1] - fy, 0, fy - w[3]) * H;
+      const d = Math.hypot(dx, dy * 1.4);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best >= 0 && bd * zoom <= maxPx ? best : -1;
   }
-  function buildTextLine(line, W, H) {
-    const [x0, y0, x1, y1, words] = line;
-    const lw = (x1 - x0) * W, lh = (y1 - y0) * H;
-    if (lw < 2 || lh < 2) return null;
-    const vertical = lh > lw * 1.5 && words.reduce((n, w) => n + w[4].length, 0) > 2;
-    const div = document.createElement("div"); div.className = "tl";
-    const fs = (vertical ? lw : lh) * 0.85;
-    Object.assign(div.style, { left: x0 * W + "px", top: y0 * H + "px", lineHeight: (vertical ? lw : lh) + "px" });
-    if (vertical) { div.style.width = lw + "px"; div.style.writingMode = "vertical-rl"; } else div.style.height = lh + "px";
-    let cursor = vertical ? y0 : x0;
-    words.forEach((w, j) => {
-      const a0 = vertical ? w[1] : w[0], a1 = vertical ? w[3] : w[2];
-      const len = (a1 - a0) * (vertical ? H : W);
-      if (len < 1) return;
-      const k = Math.min(8, Math.max(0.1, len / (naturalWidth(w) * fs)));
-      const sp = document.createElement("span"); sp.textContent = w[4];
-      sp.style.fontSize = fs + "px";
-      if (vertical) { sp.style.height = len + "px"; sp.style.width = lw + "px"; sp.style.marginTop = (a0 - cursor) * H + "px"; sp.style.transform = "scaleY(" + k + ")"; }
-      else { sp.style.width = len + "px"; sp.style.marginLeft = (a0 - cursor) * W + "px"; sp.style.transform = "scaleX(" + k + ")"; }
-      cursor = a1; div.append(sp);
-      if (j < words.length - 1) div.append(" ");
+  function selText(words, lo, hi) {
+    let out = "", line = -1;
+    for (let i = lo; i <= hi; i++) { const w = words[i]; if (i > lo) out += w[5] !== line ? "\n" : " "; out += w[4]; line = w[5]; }
+    return out;
+  }
+  function selLineSpan(words, lo, hi) {
+    let a = lo, b = hi;
+    while (a > 0 && words[a - 1][5] === words[lo][5]) a--;
+    while (b < words.length - 1 && words[b + 1][5] === words[hi][5]) b++;
+    return [a, b];
+  }
+  function selRects(words, lo, hi) {
+    const out = []; let cur = null;
+    for (let i = lo; i <= hi; i++) {
+      const w = words[i];
+      if (cur && cur.line === w[5]) { cur.x0 = Math.min(cur.x0, w[0]); cur.y0 = Math.min(cur.y0, w[1]); cur.x1 = Math.max(cur.x1, w[2]); cur.y1 = Math.max(cur.y1, w[3]); }
+      else { cur = { line: w[5], x0: w[0], y0: w[1], x1: w[2], y1: w[3] }; out.push(cur); }
+    }
+    return out;
+  }
+
+  const sel = { words: [], lo: -1, hi: -1, drag: null, lp: null, bbox: null };
+  const hLo = makeSelHandle("lo"), hHi = makeSelHandle("hi");
+  $("#selhl").append(hLo, hHi);
+  function selPick(cx, cy, maxPx) {
+    const r = el.prevImg.getBoundingClientRect(), box = $("#pagebox");
+    if (!r.width || !r.height) return -1;
+    return selNearest(sel.words, (cx - r.left) / r.width, (cy - r.top) / r.height, box.clientWidth, box.clientHeight, maxPx, zoomG.s);
+  }
+  function selClear() {
+    if (sel.lp) clearTimeout(sel.lp.t);
+    sel.lp = null; sel.drag = null; sel.lo = sel.hi = -1; zoomG.selecting = false;
+    renderSel();
+  }
+  function renderSel() {
+    const rects = $("#selrects"); rects.textContent = "";
+    const bar = $("#selbar");
+    if (sel.lo < 0) { bar.hidden = true; hLo.hidden = hHi.hidden = true; sel.bbox = null; return; }
+    const frag = document.createDocumentFragment(); let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    for (const r of selRects(sel.words, sel.lo, sel.hi)) {
+      const d = document.createElement("div"); d.className = "hl";
+      Object.assign(d.style, { left: r.x0 * 100 + "%", top: r.y0 * 100 + "%", width: (r.x1 - r.x0) * 100 + "%", height: (r.y1 - r.y0) * 100 + "%" });
+      frag.append(d); x0 = Math.min(x0, r.x0); y0 = Math.min(y0, r.y0); x1 = Math.max(x1, r.x1); y1 = Math.max(y1, r.y1);
+    }
+    rects.append(frag);
+    const a = sel.words[sel.lo], b = sel.words[sel.hi];
+    hLo.style.left = a[0] * 100 + "%"; hLo.style.top = a[3] * 100 + "%";
+    hHi.style.left = b[2] * 100 + "%"; hHi.style.top = b[3] * 100 + "%";
+    hLo.hidden = hHi.hidden = false;
+    sel.bbox = [x0, y0, x1, y1];
+    selReposition();
+  }
+  /* the Copy bar floats near the selection, kept away from the screen edges */
+  function selReposition() {
+    const bar = $("#selbar");
+    if (!sel.bbox) { bar.hidden = true; return; }
+    const ir = el.prevImg.getBoundingClientRect(), cr = el.prevCard.getBoundingClientRect(), [x0, y0, x1, y1] = sel.bbox;
+    const sx0 = ir.left + x0 * ir.width - cr.left, sx1 = ir.left + x1 * ir.width - cr.left;
+    const sy0 = ir.top + y0 * ir.height - cr.top, sy1 = ir.top + y1 * ir.height - cr.top;
+    bar.hidden = false;
+    const bw = bar.offsetWidth, bh = bar.offsetHeight;
+    const left = Math.min(Math.max((sx0 + sx1) / 2 - bw / 2, 8), Math.max(8, cr.width - bw - 8));
+    let top = sy0 - bh - 14;
+    if (top < 64) top = sy1 + 44;
+    top = Math.min(Math.max(top, 64), Math.max(64, cr.height - bh - 110));
+    bar.style.left = left + "px"; bar.style.top = top + "px";
+  }
+  function makeSelHandle(role) {
+    const h = document.createElement("div"); h.className = "sel-handle"; h.hidden = true;
+    let id = null;
+    h.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); id = e.pointerId; h.setPointerCapture(id); zoomG.selecting = true; });
+    h.addEventListener("pointermove", (e) => {
+      if (id !== e.pointerId) return;
+      const i = selPick(e.clientX, e.clientY - 18, Infinity);      /* the finger sits below the text the handle controls */
+      if (i < 0) return;
+      if (role === "lo") sel.lo = Math.min(i, sel.hi); else sel.hi = Math.max(i, sel.lo);
+      renderSel();
     });
-    return div;
+    const end = () => { id = null; zoomG.selecting = false; };
+    h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end);
+    return h;
   }
-  function layoutTextLayer() {
-    const gen = ++layoutGen, tl = resetTextDom();
-    const W = $("#pagebox").clientWidth, H = $("#pagebox").clientHeight;
-    if (!W || !H || !textLines.length) return;
-    let i = 0;
-    const step = () => {
-      if (gen !== layoutGen) return;
-      const frag = document.createDocumentFragment(), end = Math.min(i + 40, textLines.length);
-      for (; i < end; i++) { const d = buildTextLine(textLines[i], W, H); if (d) frag.append(d); }
-      tl.insertBefore(frag, eoc);
-      if (i < textLines.length) requestAnimationFrame(step);
-    };
-    step();
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall back below */ }
+    try {
+      const t = document.createElement("textarea"); t.value = text; t.style.cssText = "position:fixed;opacity:0;left:-999px";
+      document.body.appendChild(t); t.select(); const ok = document.execCommand("copy"); t.remove(); return ok;
+    } catch (e) { return false; }
   }
-  function scheduleLayout() { if (!layoutRaf) layoutRaf = requestAnimationFrame(() => { layoutRaf = 0; layoutTextLayer(); }); }
+  $("#sel-copy").addEventListener("click", async () => {
+    if (sel.lo < 0) return;
+    const ok = await copyText(selText(sel.words, sel.lo, sel.hi));
+    toast(ok ? "Copied" : "Couldn't copy", !ok); if (ok) selClear();
+  });
+  $("#sel-line").addEventListener("click", () => { if (sel.lo >= 0) { [sel.lo, sel.hi] = selLineSpan(sel.words, sel.lo, sel.hi); renderSel(); } });
+  $("#sel-all").addEventListener("click", () => { if (sel.words.length) { sel.lo = 0; sel.hi = sel.words.length - 1; renderSel(); } });
+  $("#sel-done").addEventListener("click", selClear);
+
+  /* touch: press and hold on text, then drag or use the handles. mouse: just drag. */
+  el.stage.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".hf-handle, .rx, .vnav, .sel-handle") || el.prevImg.hidden || state.drawing || state.hf || !sel.words.length || zoomG.pinch) return;
+    if (e.pointerType === "mouse") {
+      if (e.button !== 0) return;
+      const i = selPick(e.clientX, e.clientY, 40);
+      if (i < 0) { selClear(); return; }
+      sel.lo = sel.hi = i; sel.drag = { id: e.pointerId, a: i }; zoomG.selecting = true;
+      el.stage.setPointerCapture(e.pointerId); renderSel(); return;
+    }
+    if (sel.lp) clearTimeout(sel.lp.t);
+    const lp = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, fired: false };
+    lp.t = setTimeout(() => {
+      const i = selPick(lp.x, lp.y, 44);
+      if (i < 0) return;
+      lp.fired = true; sel.lo = sel.hi = i; sel.drag = { id: lp.id, a: i }; zoomG.selecting = true;
+      try { if (navigator.vibrate) navigator.vibrate(15); } catch (er) { /* not supported */ }
+      renderSel();
+    }, 420);
+    sel.lp = lp;
+  }, true);
+  el.stage.addEventListener("pinchstart", () => { if (sel.lp) clearTimeout(sel.lp.t); sel.lp = null; });
+  el.stage.addEventListener("pointermove", (e) => {
+    if (sel.lp && sel.lp.id === e.pointerId && !sel.lp.fired && Math.hypot(e.clientX - sel.lp.x, e.clientY - sel.lp.y) > 10) { clearTimeout(sel.lp.t); sel.lp.moved = true; }
+    if (sel.drag && sel.drag.id === e.pointerId) {
+      const i = selPick(e.clientX, e.clientY, Infinity);
+      if (i >= 0) { sel.lo = Math.min(sel.drag.a, i); sel.hi = Math.max(sel.drag.a, i); renderSel(); }
+    }
+  });
+  const selEnd = (e) => {
+    if (sel.lp && sel.lp.id === e.pointerId) {
+      clearTimeout(sel.lp.t);
+      const tap = !sel.lp.fired && !sel.lp.moved && e.type === "pointerup";
+      sel.lp = null;
+      if (tap && sel.lo >= 0) selClear();
+    }
+    if (sel.drag && sel.drag.id === e.pointerId) { sel.drag = null; zoomG.selecting = false; }
+  };
+  el.stage.addEventListener("pointerup", selEnd);
+  el.stage.addEventListener("pointercancel", selEnd);
+  document.addEventListener("keydown", (e) => {
+    if (sel.lo < 0 || $(".modal:not([hidden])")) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") { e.preventDefault(); $("#sel-copy").click(); }
+    else if (e.key === "Escape") selClear();
+  });
+  window.addEventListener("resize", selReposition);
+
+  function clearTextLayer() { selClear(); sel.words = []; }
   async function loadTextLayer(path, pw, page, token) {
     try {
       const r = await rpc("words", { path, password: pw, page });
       if (token !== state.previewToken) return;
-      textLines = JSON.parse(r.json).lines; layoutTextLayer();
-    } catch (e) { if (token === state.previewToken) clearTextLayer(); }
+      const words = [];
+      JSON.parse(r.json).lines.forEach((l, li) => l[4].forEach((w) => words.push([w[0], w[1], w[2], w[3], w[4], li])));
+      sel.words = words;
+    } catch (e) { if (token === state.previewToken) sel.words = []; }
   }
-  if (window.ResizeObserver) new ResizeObserver(scheduleLayout).observe($("#pagebox"));
-  el.prevImg.addEventListener("load", scheduleLayout);
 
   /* Preview rendering: quick page flips are merged into one render; size follows the screen */
   let previewRun = null, previewAgain = false;
@@ -979,6 +1084,7 @@
   function go(view, mode) {
     nav.view = view;
     if (zoomG.reset) zoomG.reset();
+    selClear();
     if (view !== "upload") setTool(null);
     if (view === "settings") refreshUc();
     if (mode) nav.mode = mode;
@@ -1090,7 +1196,7 @@
    * ------------------------------------------------------------------ */
   function openModal(id) {
     const m = $("#" + id);
-    if (id === "modal-opts") { $("#mo-title").textContent = nav.view === "batch" ? "Batch Options" : "Cleaning Options"; $("#o-actions").hidden = nav.view === "batch"; }
+    if (id === "modal-opts") { $("#mo-title").textContent = nav.view === "batch" ? "Batch Options" : "Cleaning Options" }
     if (id === "modal-hf") $("#hf-hide").hidden = nav.view === "batch";
     if (id === "modal-areas") $("#ar-draw").hidden = nav.view === "batch";
     m.hidden = false; m._t = Date.now(); document.body.classList.add("modal-open");
@@ -1116,7 +1222,7 @@
    * ------------------------------------------------------------------ */
   $("#an-chips-slot").appendChild(el.chips);
   $("#viewer-back").addEventListener("click", () => { if (state.itemIdx != null) leaveItem(); else go("home"); });
-  $("#an-clean").addEventListener("click", () => { closeModal($("#modal-analysis")); openNameDialog("clean"); });
+  $("#an-clean").addEventListener("click", () => { closeModal($("#modal-analysis")); if (nav.view === "batch") startBatchClean(); else openNameDialog("clean"); });
   $("#an-copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($("#an-report").textContent); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
@@ -1185,7 +1291,7 @@
       wrap.style.transform = s === 1 && Math.abs(tx) < 0.5 && Math.abs(ty) < 0.5 ? "" : "translate(" + tx + "px, " + ty + "px) scale(" + s + ")";
       wrap.style.setProperty("--zs", String(s));
       stage.classList.toggle("zoomed", s > 1.02);
-      scheduleHires();
+      scheduleHires(); selReposition();
     }
     zoomG.reset = () => { g = null; ptrs.clear(); zoomG.pinch = false; zoomG.panning = false; apply(1, 0, 0, false); hideHires(); };
     zoomG.refresh = () => { hideHires(); scheduleHires(); };
@@ -1224,7 +1330,7 @@
     }
 
     stage.addEventListener("pointerdown", (e) => {
-      if (el.prevImg.hidden || e.target.closest(".hf-handle, .rx, .vnav")) return;
+      if (el.prevImg.hidden || e.target.closest(".hf-handle, .rx, .vnav, .sel-handle")) return;
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: performance.now() });
       if (ptrs.size === 2) {
         zoomG.pinch = true; stage.dispatchEvent(new Event("pinchstart"));
@@ -1306,7 +1412,7 @@
     const box = $("#pagebox");
     let s0 = null, dx = 0;
     el.stage.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || zoomG.s > 1.02 || zoomG.selecting || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
+      if (e.pointerType === "mouse" || zoomG.s > 1.02 || zoomG.selecting || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle, .sel-handle")) return;
       s0 = { x: e.clientX }; dx = 0; box.style.transition = "none";
     });
     el.stage.addEventListener("pointermove", (e) => { if (!s0) return; if (zoomG.panning || zoomG.selecting) { s0 = null; dx = 0; box.style.transition = ""; box.style.transform = ""; return; } dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
@@ -1347,7 +1453,7 @@
   const viaMenu = (id, fn) => $("#" + id).addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); fn(); });
   viaMenu("o-hf", () => { if (nav.view === "batch" || state.hf) openModal("modal-hf"); else setTool("hf"); });
   el.draw.addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); if (nav.view === "batch" || state.drawing || el.regions.value.trim()) openModal("modal-areas"); else setTool("draw"); });
-  $("#o-analyze").addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); el.btnAnalyze.click(); });
+  $("#o-analyze").addEventListener("click", () => { if (fresh()) return; closeModal(optsModal); if (nav.view === "batch") analyzeBatch(); else el.btnAnalyze.click(); });
   viaMenu("o-text", () => openModal("modal-text"));
   viaMenu("o-wm", () => openModal("modal-wm"));
   viaMenu("o-other", () => openModal("modal-other"));
@@ -1514,23 +1620,18 @@
     if (el.imgWm.checked || el.xrefs.value.trim()) out.push("Image watermarks");
     return out;
   }
-  function renderAnalysis(text) {
+  function parseReport(text) {
     const num = (re) => { const m = text.match(re); return m ? Number(m[1]) : null; };
-    const pages = num(/^Pages:\s*(\d+)/m), chars = num(/^Selectable text characters:\s*(\d+)/m);
-    const annots = num(/^Annotations\/stamps:\s*(\d+)/m), links = num(/^Hyperlinks:\s*(\d+)/m), atts = num(/^Embedded attachments:\s*(\d+)/m);
-    const hidden = num(/^Hidden\/tracker text spans:\s*(\d+)/m), mfields = num(/^Standard metadata fields with values:\s*(\d+)/m);
-    const hasMeta = /^XMP metadata:\s*found/im.test(text) || mfields > 0;
-    const images = (text.match(/^\s*XRef \d+:/gm) || []).length;
-    const tiles = [
-      ["Pages", pages == null ? "?" : pages, ""],
-      ["Text characters", chars === 0 ? "None" : chars == null ? "?" : chars.toLocaleString(), chars === 0 ? "warn" : ""],
-      ["Annotations", annots || 0, annots ? "warn" : "ok"],
-      ["Links", links || 0, links ? "warn" : "ok"],
-      ["Attachments", atts || 0, atts ? "warn" : "ok"],
-      ["Metadata", hasMeta ? "Found" : "None", hasMeta ? "warn" : "ok"],
-      ["Hidden text", hidden || 0, hidden ? "warn" : "ok"],
-      ["Images", images, ""],
-    ];
+    const mfields = num(/^Standard metadata fields with values:\s*(\d+)/m);
+    const phrase = text.match(/Configured text phrase scan:\n((?:[ \t]+.*\n?)+)/);
+    return {
+      pages: num(/^Pages:\s*(\d+)/m), chars: num(/^Selectable text characters:\s*(\d+)/m), annots: num(/^Annotations\/stamps:\s*(\d+)/m),
+      links: num(/^Hyperlinks:\s*(\d+)/m), atts: num(/^Embedded attachments:\s*(\d+)/m), hidden: num(/^Hidden\/tracker text spans:\s*(\d+)/m),
+      hasMeta: /^XMP metadata:\s*found/im.test(text) || mfields > 0, images: (text.match(/^\s*XRef \d+:/gm) || []).length,
+      matches: phrase ? phrase[1].split("\n").map((l) => l.trim().replace(/^[•*-]\s*/, "")).filter(Boolean) : [],
+    };
+  }
+  function showAnalysis(tiles, sub, lines, report, cleanLabel) {
     const grid = $("#an-grid"); grid.textContent = "";
     tiles.forEach(([label, value, tone]) => {
       const t = document.createElement("div"); t.className = "an-tile" + (tone ? " " + tone : "");
@@ -1538,18 +1639,51 @@
       const sp = document.createElement("span"); sp.textContent = label;
       t.append(b, sp); grid.append(t);
     });
-    $("#an-sub").textContent = state.file ? state.file.name + (pages ? " · " + pages + " pages" : "") : "";
-    const m = text.match(/Configured text phrase scan:\n((?:[ \t]+.*\n?)+)/);
+    $("#an-sub").textContent = sub;
     const ul = $("#an-matches"); ul.textContent = "";
-    if (m) m[1].split("\n").map((l) => l.trim()).filter(Boolean).forEach((l) => { const li = document.createElement("li"); li.textContent = l; ul.append(li); });
-    ul.hidden = !ul.children.length;
+    lines.forEach((l) => { const li = document.createElement("li"); li.textContent = l; ul.append(li); });
+    ul.hidden = !lines.length;
     const plan = $("#an-plan"); plan.textContent = "";
     const list = plannedActions();
     (list.length ? list : ["Nothing selected"]).forEach((x) => {
       const c = document.createElement("span"); c.className = "an-chip" + (list.length ? "" : " none"); c.textContent = x; plan.append(c);
     });
+    $("#an-clean span").textContent = cleanLabel;
+    writeReport(report);
   }
-
+  function renderAnalysis(text) {
+    const r = parseReport(text);
+    showAnalysis([
+      ["Pages", r.pages == null ? "?" : r.pages, ""],
+      ["Text characters", r.chars === 0 ? "None" : r.chars == null ? "?" : r.chars.toLocaleString(), r.chars === 0 ? "warn" : ""],
+      ["Annotations", r.annots || 0, r.annots ? "warn" : "ok"], ["Links", r.links || 0, r.links ? "warn" : "ok"],
+      ["Attachments", r.atts || 0, r.atts ? "warn" : "ok"], ["Metadata", r.hasMeta ? "Found" : "None", r.hasMeta ? "warn" : "ok"],
+      ["Hidden text", r.hidden || 0, r.hidden ? "warn" : "ok"], ["Images", r.images, ""],
+    ], state.file ? state.file.name + (r.pages ? " · " + r.pages + " pages" : "") : "", r.matches, text, "Clean PDF");
+  }
+  /* batch: totals for every PDF, plus one line per PDF that has something to clean */
+  function renderBatchAnalysis(results) {
+    const parts = results.map(({ it, report }) => ({ n: batch.items.indexOf(it) + 1, it, r: parseReport(report), report }));
+    const sum = (k) => parts.reduce((a, p) => a + (p.r[k] || 0), 0);
+    const pages = sum("pages"), chars = sum("chars"), annots = sum("annots"), links = sum("links"), atts = sum("atts"), hidden = sum("hidden");
+    const withMeta = parts.filter((p) => p.r.hasMeta).length;
+    const lines = [];
+    parts.forEach(({ n, it, r }) => {
+      const f = [];
+      if (r.links) f.push(r.links + " links"); if (r.annots) f.push(r.annots + " annotations"); if (r.atts) f.push(r.atts + " attachments");
+      if (r.hidden) f.push(r.hidden + " hidden text"); if (r.hasMeta) f.push("metadata"); if (r.chars === 0) f.push("no selectable text");
+      r.matches.forEach((m) => { if (!/:\s*0 text match/.test(m)) f.push(m); });
+      if (f.length) lines.push("#" + n + " " + it.name + ": " + f.join(", "));
+    });
+    showAnalysis([
+      ["PDFs", parts.length, ""], ["Pages", pages, ""],
+      ["Text characters", chars === 0 ? "None" : chars.toLocaleString(), chars === 0 ? "warn" : ""],
+      ["Annotations", annots, annots ? "warn" : "ok"], ["Links", links, links ? "warn" : "ok"], ["Attachments", atts, atts ? "warn" : "ok"],
+      ["Metadata", withMeta ? withMeta + " of " + parts.length : "None", withMeta ? "warn" : "ok"], ["Hidden text", hidden, hidden ? "warn" : "ok"],
+    ], parts.length + (parts.length > 1 ? " PDFs · " : " PDF · ") + pages + " pages", lines,
+      parts.map((p) => "=== #" + p.n + " " + p.it.name + " ===\n" + p.report).join("\n"), "Clean all PDFs");
+    lastXrefs = []; renderXrefChips();
+  }
 
   /* ------------------------------------------------------------------ *
    * Batch: list, passwords, per-file options, clean all                *
@@ -1668,8 +1802,6 @@
     });
     const n = batch.items.length, locked = batch.items.filter(isLocked).length;
     $("#batch-empty").hidden = n > 0;
-    $("#b-clean").disabled = !n || state.busy;
-    $("#b-clean span").textContent = n ? "Clean all (" + n + ")" : "Clean all";
     $("#b-pw-badge").hidden = !locked; $("#b-pw-badge").textContent = String(locked);
   }
   function syncBatchItem() {
@@ -1748,6 +1880,7 @@
       main.append(nm, inp, st); li.append(num, th, main); list.append(li);
     });
     openModal("modal-bpw");
+    setTimeout(() => $("#bpw-all").focus(), 120);
   }
   function addSpareSlot() {
     const row = document.createElement("div"); row.className = "bpw-slot";
@@ -1762,7 +1895,7 @@
   $("#bpw-ok").addEventListener("click", async () => {
     if (state.busy) return;
     const btn = $("#bpw-ok"); btn.disabled = true;
-    const spares = $$("#bpw-spare input").map((i) => i.value);
+    const spares = [$("#bpw-all").value, ...$$("#bpw-spare input").map((i) => i.value)];
     try {
       for (const row of $$("#bpw-list .bpw-row")) {
         const it = batch.items.find((x) => String(x.id) === row.dataset.id); if (!it || !isLocked(it)) continue;
@@ -1776,20 +1909,57 @@
         if (ok) row.querySelector("input").disabled = true;
       }
     } finally { btn.disabled = false; renderBatch(); }
-    if (!batch.items.some(isLocked)) { closeModal($("#modal-bpw")); toast("All PDFs unlocked"); }
+    if (!batch.items.some(isLocked)) { $("#bpw-all").value = ""; closeModal($("#modal-bpw")); toast("All PDFs unlocked"); }
+  });
+  $("#bpw-all").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#bpw-ok").click(); });
+  $("#bpw-paste").addEventListener("click", async () => {
+    try { const t = await navigator.clipboard.readText(); if (t) $("#bpw-all").value = t.trim(); else toast("Clipboard is empty.", true); }
+    catch (e) { toast("Press and hold in the box to paste.", true); }
+    $("#bpw-all").focus();
   });
   $("#b-pw").addEventListener("click", () => { if (!state.busy) openPasswords(); });
   $("#b-add").addEventListener("click", () => { if (!state.busy) el.batchInput.click(); });
   $("#b-clear").addEventListener("click", clearBatch);
   el.batchInput.addEventListener("change", () => { const files = [...el.batchInput.files]; el.batchInput.value = ""; if (files.length) { go("batch"); addBatchFiles(files); } });
 
-  /* Clean all */
-  $("#b-clean").addEventListener("click", async () => {
-    if (state.busy || !batch.items.length) return;
+  /* Analyze and Clean all start from the options icon, like a single PDF */
+  async function lockedCheck() {
     const locked = batch.items.filter(isLocked).length;
-    if (locked && await confirmBox({ title: "Locked PDFs", text: locked + " PDF" + (locked > 1 ? "s are" : " is") + " still locked.", ok: "Enter passwords", cancel: "Skip them" })) { openPasswords(); return; }
-    openNameDialog("batch");
-  });
+    if (locked && await confirmBox({ title: "Locked PDFs", text: locked + " PDF" + (locked > 1 ? "s are" : " is") + " still locked.", ok: "Enter passwords", cancel: "Skip them" })) { openPasswords(); return false; }
+    return true;
+  }
+  async function startBatchClean() {
+    if (state.busy || !batch.items.length) return;
+    if (await lockedCheck()) openNameDialog("batch");
+  }
+  async function analyzeBatch() {
+    if (state.busy) return;
+    if (!batch.items.length) { toast("Add PDFs first.", true); return; }
+    if (!(await lockedCheck())) return;
+    const targets = batch.items.filter((it) => !isLocked(it));
+    if (!targets.length) { toast("No unlocked PDFs to analyze.", true); return; }
+    const snap = snapOptions(), results = [];
+    setBusy(true, "Analyzing…", "Analyzing PDFs", batchNote(targets.map((t) => t.file)));
+    startEta(0);
+    try {
+      for (let k = 0; k < targets.length; k++) {
+        const it = targets[k], o = it.opts || snap;
+        state.batch = { i: k + 1, n: targets.length };
+        el.ovlTitle.textContent = "Analyzing PDF " + (k + 1) + " of " + targets.length;
+        setStatus(it.name);
+        await ensureItem(it);
+        const r = await rpc("job", { job: { kind: "analyze", input: it.work, password: "", watermark: o.watermark, header: o.header, footer: o.footer } });
+        results.push({ it, report: r.report });
+      }
+    } catch (err) {
+      if (err.cancelled) { await afterCancel(true); return; }
+      state.batch = null; fail("Analysis failed", err); return;
+    }
+    state.batch = null; $("#busy-cancel").hidden = true;
+    renderBatchAnalysis(results);
+    setBusy(false, "Analysis complete");
+    openModal("modal-analysis");
+  }
   async function runBatch(suffix, folder) {
     const snap = snapOptions(), targets = batch.items.filter((it) => !isLocked(it));
     if (!targets.length) { toast("No unlocked PDFs to clean.", true); return; }
@@ -1841,6 +2011,7 @@
     if (state.busy) return true;
     const m = $(".modal:not([hidden])");
     if (m) { closeModal(m); return true; }
+    if (sel.lo >= 0) { selClear(); return true; }
     if (state.itemIdx != null) { leaveItem(); return true; }
     if (nav.view !== "home") { go("home"); return true; }
     return false;
