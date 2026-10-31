@@ -1341,10 +1341,47 @@ def preview_pdf(path: str, password: str = "", page_index: int = 0, zoom: float 
     return {"png": pix.tobytes("jpeg", jpg_quality=85), "pages": count, "page": page_index, "w": w, "h": h}
 
 
+def _reading_order(lines):
+    """Header lines first, footer lines last, body top-to-bottom. Multi-column pages keep the
+    document's own block order so a selection never runs across the other column."""
+    def mid(l):
+        return (l[1] + l[3]) / 2
+
+    def hgt(l):
+        return max(l[3] - l[1], 1e-6)
+
+    head = [l for l in lines if mid(l) < 0.08]
+    foot = [l for l in lines if mid(l) > 0.90]
+    skip = {id(l) for l in head} | {id(l) for l in foot}
+    body = [l for l in lines if id(l) not in skip]
+
+    def rows(ls):
+        out, row = [], []
+        for l in sorted(ls, key=mid):
+            if row and abs(mid(l) - mid(row[0])) > 0.5 * min(hgt(l), hgt(row[0])):
+                out += sorted(row, key=lambda r: r[0])
+                row = []
+            row.append(l)
+        return out + sorted(row, key=lambda r: r[0])
+
+    multi = False
+    ys = sorted(body, key=lambda l: l[1])
+    for i, a in enumerate(ys):
+        for b in ys[i + 1:]:
+            if b[1] >= a[3] - 0.5 * min(hgt(a), hgt(b)):
+                break
+            if b[0] > a[2] + 0.02 or a[0] > b[2] + 0.02:
+                multi = True
+                break
+        if multi:
+            break
+    return rows(head) + (body if multi else rows(body)) + rows(foot)
+
+
 def page_text_lines(path: str, password: str = "", page_index: int = 0) -> str:
     """Text of one page as JSON for the copyable layer over the preview:
     {"lines": [[x0, y0, x1, y1, [[wx0, wy0, wx1, wy1, "word"], ...]], ...]} in 0..1 page fractions,
-    in the orientation the page is rendered."""
+    in the orientation the page is rendered, in reading order."""
     doc = _preview_doc(path, password)
     page_index = max(0, min(int(page_index), len(doc) - 1))
     page = doc[page_index]
@@ -1366,18 +1403,22 @@ def page_text_lines(path: str, password: str = "", page_index: int = 0) -> str:
     def ny(v):
         return round((v - rect.y0) / h, 4)
 
-    lines, total = [], 0
-    for key in order[:800]:
+    raw = []
+    for key in order:
         words, ux0, uy0, ux1, uy1 = [], 9.0, 9.0, -9.0, -9.0
         for x0, y0, x1, y1, word in groups[key]:
             r = fitz.Rect(x0, y0, x1, y1) * rot
             wx0, wy0, wx1, wy1 = nx(r.x0), ny(r.y0), nx(r.x1), ny(r.y1)
             words.append([wx0, wy0, wx1, wy1, word])
             ux0, uy0, ux1, uy1 = min(ux0, wx0), min(uy0, wy0), max(ux1, wx1), max(uy1, wy1)
-        total += len(words)
-        if total > 3000:
-            break
-        lines.append([ux0, uy0, ux1, uy1, words])
+        raw.append([ux0, uy0, ux1, uy1, words])
+    ordered = _reading_order(raw)
+    lines, total = [], 0
+    for line in ordered[:800]:
+        total += len(line[4])
+        if total > 3000 and line[1] < 0.90:
+            continue
+        lines.append(line)
     return json.dumps({"lines": lines})
 
 

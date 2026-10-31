@@ -416,7 +416,14 @@
 
   /* Copyable text laid over the preview image: every word sits at its own position */
   let textLines = [], layoutGen = 0, layoutRaf = 0, measureCtx = null;
-  function clearTextLayer() { layoutGen++; textLines = []; $("#textlayer").textContent = ""; }
+  const eoc = document.createElement("div"); eoc.className = "eoc";
+  function resetTextDom() { const tl = $("#textlayer"); tl.textContent = ""; tl.append(eoc); return tl; }
+  function clearTextLayer() { layoutGen++; textLines = []; resetTextDom(); }
+  document.addEventListener("selectionchange", () => {
+    const sel = document.getSelection(), tl = $("#textlayer");
+    const on = !!sel && sel.rangeCount > 0 && !sel.isCollapsed && tl.contains(sel.anchorNode);
+    zoomG.selecting = on; tl.classList.toggle("sel", on);
+  });
   function naturalWidth(w) {
     if (w.nw) return w.nw;
     measureCtx = measureCtx || document.createElement("canvas").getContext("2d");
@@ -449,7 +456,7 @@
     return div;
   }
   function layoutTextLayer() {
-    const gen = ++layoutGen, tl = $("#textlayer"); tl.textContent = "";
+    const gen = ++layoutGen, tl = resetTextDom();
     const W = $("#pagebox").clientWidth, H = $("#pagebox").clientHeight;
     if (!W || !H || !textLines.length) return;
     let i = 0;
@@ -457,7 +464,7 @@
       if (gen !== layoutGen) return;
       const frag = document.createDocumentFragment(), end = Math.min(i + 40, textLines.length);
       for (; i < end; i++) { const d = buildTextLine(textLines[i], W, H); if (d) frag.append(d); }
-      tl.append(frag);
+      tl.insertBefore(frag, eoc);
       if (i < textLines.length) requestAnimationFrame(step);
     };
     step();
@@ -1150,12 +1157,14 @@
   /* ------------------------------------------------------------------ *
    * Pinch zoom, pan and double-tap on the preview                      *
    * ------------------------------------------------------------------ */
-  const zoomG = { s: 1, tx: 0, ty: 0, pinch: false, reset: null, refresh: null };
+  const zoomG = { s: 1, tx: 0, ty: 0, pinch: false, panning: false, selecting: false, reset: null, refresh: null };
   /* keep the page on screen: centred when smaller than the stage, edge-limited when larger */
   function zoomClamp(s, tx, ty, d) {
-    const cw = s * d.bw, ch = s * d.bh;
+    const cw = s * d.bw, ch = s * d.bh, ex = d.extra || 0;
     const x = cw <= d.W ? (d.W - cw) / 2 - s * d.bx : Math.min(-s * d.bx, Math.max(d.W - cw - s * d.bx, tx));
-    const y = ch <= d.H ? (d.H - ch) / 2 - s * d.by : Math.min(-s * d.by, Math.max(d.H - ch - s * d.by, ty));
+    let y;
+    if (ch <= d.H) { const cy = (d.H - ch) / 2 - s * d.by; y = Math.min(cy + ex, Math.max(cy - ex, ty)); }
+    else y = Math.min(-s * d.by + ex, Math.max(d.H - ch - s * d.by - ex, ty));
     return [x, y];
   }
   /* new translation that keeps the content point under the start midpoint under the current midpoint */
@@ -1164,7 +1173,7 @@
     const stage = el.stage, wrap = $("#zoomwrap"), box = $("#pagebox"), hires = $("#hires");
     const MAX = 5, ptrs = new Map();
     let g = null, lastTap = null, hiT = 0, hiBusy = false, hiAgain = false, hiUrl = "";
-    const dims = () => ({ W: stage.clientWidth, H: stage.clientHeight, bx: box.offsetLeft, by: box.offsetTop, bw: box.offsetWidth, bh: box.offsetHeight });
+    const dims = () => ({ W: stage.clientWidth, H: stage.clientHeight, bx: box.offsetLeft, by: box.offsetTop, bw: box.offsetWidth, bh: box.offsetHeight, extra: stage.clientHeight * 0.45 });
     const dist = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
     const mid = () => { const [a, b] = [...ptrs.values()]; const r = stage.getBoundingClientRect(); return [(a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top]; };
     const local = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -1178,7 +1187,7 @@
       stage.classList.toggle("zoomed", s > 1.02);
       scheduleHires();
     }
-    zoomG.reset = () => { g = null; ptrs.clear(); zoomG.pinch = false; apply(1, 0, 0, false); hideHires(); };
+    zoomG.reset = () => { g = null; ptrs.clear(); zoomG.pinch = false; zoomG.panning = false; apply(1, 0, 0, false); hideHires(); };
     zoomG.refresh = () => { hideHires(); scheduleHires(); };
 
     /* sharp tile of just the visible part, so text stays crisp when zoomed in */
@@ -1221,8 +1230,8 @@
         zoomG.pinch = true; stage.dispatchEvent(new Event("pinchstart"));
         const [mx, my] = mid();
         g = { type: "pinch", d0: dist(), s0: zoomG.s, tx0: zoomG.tx, ty0: zoomG.ty, mx, my };
-      } else if (ptrs.size === 1 && zoomG.s > 1.02 && !state.drawing && e.pointerType !== "mouse") {
-        g = { type: "pan", id: e.pointerId, x0: e.clientX, y0: e.clientY, tx0: zoomG.tx, ty0: zoomG.ty, moved: false };
+      } else if (ptrs.size === 1 && !state.drawing && !zoomG.selecting && e.pointerType !== "mouse") {
+        g = { type: "pan", id: e.pointerId, x0: e.clientX, y0: e.clientY, tx0: zoomG.tx, ty0: zoomG.ty, moved: false, fit: zoomG.s <= 1.02 };
       }
     }, true);
     stage.addEventListener("pointermove", (e) => {
@@ -1234,21 +1243,27 @@
         const [mx, my] = mid(), [tx, ty] = pinchTo(g, s, mx, my);
         apply(s, tx, ty, false);
       } else if (g.type === "pan" && g.id === e.pointerId) {
+        if (zoomG.selecting) { g = null; zoomG.panning = false; return; }
         const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
-        if (!g.moved && Math.hypot(dx, dy) < 6) return;
-        g.moved = true; apply(zoomG.s, g.tx0 + dx, g.ty0 + dy, false);
+        if (!g.moved) {
+          if (Math.hypot(dx, dy) < 8) return;
+          if (g.fit && Math.abs(dy) <= Math.abs(dx) * 1.2) { g = null; return; }
+          g.moved = true; zoomG.panning = true;
+        }
+        apply(zoomG.s, g.fit ? zoomG.tx : g.tx0 + dx, g.ty0 + dy, false);
       }
     }, true);
     const up = (e) => {
       const p = ptrs.get(e.pointerId); if (!p) return;
       const wasOnly = ptrs.size === 1, moved = Math.hypot(e.clientX - p.x0, e.clientY - p.y0);
       ptrs.delete(e.pointerId);
+      if (g && g.type === "pan" && g.id === e.pointerId) zoomG.panning = false;
       if (g && g.type === "pinch") {
         if (ptrs.size < 2) {
-          zoomG.pinch = false;
+          zoomG.pinch = false; zoomG.panning = false;
           if (zoomG.s < 1.05) apply(1, 0, 0, true);
           const rest = [...ptrs.entries()][0];
-          g = rest && zoomG.s > 1.02 ? { type: "pan", id: rest[0], x0: rest[1].x, y0: rest[1].y, tx0: zoomG.tx, ty0: zoomG.ty, moved: true } : null;
+          g = rest ? { type: "pan", id: rest[0], x0: rest[1].x, y0: rest[1].y, tx0: zoomG.tx, ty0: zoomG.ty, moved: true, fit: false } : null;
         }
         return;
       }
@@ -1274,7 +1289,7 @@
         e.preventDefault();
         const s = Math.min(MAX, Math.max(1, zoomG.s * Math.exp(-e.deltaY * 0.01))), k = s / zoomG.s;
         apply(s, px - (px - zoomG.tx) * k, py - (py - zoomG.ty) * k, false);
-      } else if (zoomG.s > 1.02) { e.preventDefault(); apply(zoomG.s, zoomG.tx - e.deltaX, zoomG.ty - e.deltaY, false); }
+      } else { e.preventDefault(); apply(zoomG.s, zoomG.s > 1.02 ? zoomG.tx - e.deltaX : zoomG.tx, zoomG.ty - e.deltaY, false); }
     }, { passive: false });
     document.addEventListener("keydown", (e) => {
       if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])") || el.prevImg.hidden) return;
@@ -1291,10 +1306,10 @@
     const box = $("#pagebox");
     let s0 = null, dx = 0;
     el.stage.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || zoomG.s > 1.02 || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
+      if (e.pointerType === "mouse" || zoomG.s > 1.02 || zoomG.selecting || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle")) return;
       s0 = { x: e.clientX }; dx = 0; box.style.transition = "none";
     });
-    el.stage.addEventListener("pointermove", (e) => { if (!s0) return; dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
+    el.stage.addEventListener("pointermove", (e) => { if (!s0) return; if (zoomG.panning || zoomG.selecting) { s0 = null; dx = 0; box.style.transition = ""; box.style.transform = ""; return; } dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
     const end = () => {
       if (!s0) return;
       s0 = null; box.style.transition = ""; box.style.transform = "";

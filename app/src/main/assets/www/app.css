@@ -538,3 +538,10 @@ html.lite .pagebox, html.lite .modal-card { transition: none; animation: none; }
 .hf-handle::before { height: calc(3px / var(--zs, 1)); }
 .hf-handle.t .hf-pill { transform: translateX(-50%) scale(calc(1 / var(--zs, 1))); transform-origin: 50% 0; }
 .hf-handle.f .hf-pill { transform: translateX(-50%) scale(calc(1 / var(--zs, 1))); transform-origin: 50% 100%; }
+
+/* ---- Selection stays inside the text: layers + end-of-content anchor ---- */
+.textlayer { z-index: 1; }
+.overlay { z-index: 2; }
+.hf { z-index: 3; }
+.textlayer .eoc { position: absolute; left: 0; right: 0; bottom: 0; top: 100%; z-index: -1; user-select: none; -webkit-user-select: none; cursor: default; }
+.textlayer.sel .eoc { top: 0; }
