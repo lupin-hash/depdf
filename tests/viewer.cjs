@@ -5,7 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function textPdf({ rich = false } = {}) {
+function textPdf({ rich = false, pages = 1 } = {}) {
   const stream = 'BT /F1 24 Tf 60 660 Td (Alpha) Tj 200 0 Td (Bravo) Tj 200 0 Td (Charlie) Tj -400 -200 Td (Delta Echo Foxtrot) Tj ET';
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
@@ -19,6 +19,9 @@ function textPdf({ rich = false } = {}) {
       '<< /Type /Filespec /F (notes.txt) /EF << /F 10 0 R >> >>',
       '<< /Type /EmbeddedFile /Length 5 >>\nstream\nnotes\nendstream');
   }
+  const kids = ['3 0 R'];
+  for (let i = 1; i < pages; i++) { objects.push(objects[2]); kids.push(objects.length + ' 0 R'); }
+  objects[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${pages} >>`;
   let text = '%PDF-1.4\n'; const offsets = [0];
   objects.forEach((o, i) => { offsets.push(Buffer.byteLength(text)); text += `${i + 1} 0 obj\n${o}\nendobj\n`; });
   const xref = Buffer.byteLength(text);
@@ -44,7 +47,7 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     window.copies = [];
-    window.AndroidBridge = { getVersion: () => '1.0', takeIncomingName: () => '', syncAppearance: () => {}, copyText: text => { window.copies.push(text); return true; } };
+    window.AndroidBridge = { getVersion: () => '1.0', checkUpdate: () => {}, takeIncomingName: () => '', syncAppearance: () => {}, copyText: text => { window.copies.push(text); return true; } };
     // Observe real word extraction without replacing any worker behavior.
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
@@ -63,6 +66,35 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => document.querySelector('#boot').hidden, { timeout: 45000 });
+  await t.test('redesigned home stays usable on phones and wide screens without the launcher icon or old tagline', async () => {
+    assert.equal(await page.locator('.top img').count(), 0);
+    assert(!(await page.locator('#app').textContent()).includes('for data extraction'));
+    for (const width of [320, 412, 960]) {
+      await page.setViewportSize({ width, height: 915 });
+      assert(await page.locator('#m-upload').isVisible()); assert(await page.locator('#m-batch').isVisible());
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+    await page.setViewportSize({ width: 412, height: 915 });
+    if (process.env.UI_SCREENSHOTS_DIR) { fs.mkdirSync(process.env.UI_SCREENSHOTS_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.UI_SCREENSHOTS_DIR, 'home-light.png'), fullPage: true, animations: 'disabled' }); }
+  });
+  await t.test('settings contain credits and a readable permission/responsibility disclaimer in light and dark themes', async () => {
+    await page.locator('#m-settings').click();
+    assert.equal(await page.locator('#credits .developer-credit strong').textContent(), 'DePDF developer');
+    for (const project of ['PyMuPDF', 'Pyodide', 'Capacitor']) assert((await page.locator('#credits').textContent()).includes(project));
+    for (const theme of ['Dark', 'Light']) {
+      await page.locator('.theme-chip').filter({ hasText: new RegExp('^' + theme + '$') }).click();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      if (process.env.UI_SCREENSHOTS_DIR) await page.screenshot({ path: path.join(process.env.UI_SCREENSHOTS_DIR, 'settings-' + theme.toLowerCase() + '.png'), fullPage: true, animations: 'disabled' });
+    }
+    await page.locator('#open-disclaimer').click();
+    const copy = await page.locator('#modal-disclaimer').textContent();
+    for (const text of ['explicit permission', 'developer is not liable', 'applicable law', 'Keep a backup']) assert(copy.includes(text));
+    assert(await page.locator('#modal-disclaimer .modal-card').evaluate(c => c.scrollWidth <= c.clientWidth + 1));
+    if (process.env.UI_SCREENSHOTS_DIR) await page.screenshot({ path: path.join(process.env.UI_SCREENSHOTS_DIR, 'disclaimer.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    await page.locator('.theme-chip').filter({ hasText: /^System$/ }).click();
+    await page.locator('#back-btn').click();
+  });
   await page.locator('#file-input').setInputFiles({ name: 'selection.pdf', mimeType: 'application/pdf', buffer: textPdf() });
   await page.waitForFunction(() => window.testWords?.length === 6 && document.body.classList.contains('viewer-open'));
   await page.locator('#prev-img').evaluate(img => img.decode());
@@ -88,28 +120,17 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   const copyCount = () => page.evaluate(() => window.copies.length);
   const lastCopy = () => page.evaluate(() => window.copies.at(-1));
 
-  await t.test('eraser selects only touched words, skips untouched words, and copies on release', async () => {
-    const a = await word('Alpha'), c = await word('Charlie');
+  await t.test('dragging the eraser over words only moves the button and never selects or copies text', async () => {
+    const a = await word('Alpha'), c = await word('Charlie'), count = await copyCount();
     await dock(a.x, a.y - 90);
+    const before = await page.locator('#bubble').boundingBox();
     await page.mouse.move(a.x, a.y - 90); await page.mouse.down();
-    await page.mouse.move(a.x, a.y, { steps: 6 });
-    await page.mouse.move(a.x, a.y - 90, { steps: 6 });
-    await page.mouse.move(c.x, c.y - 90, { steps: 12 });
-    await page.mouse.move(c.x, c.y, { steps: 6 });
-    assert.equal(await copyCount(), 0);
-    await page.mouse.up();
-    await page.waitForFunction(() => window.copies.length === 1);
-    assert.deepEqual((await lastCopy()).split(/\s+/), ['Alpha', 'Charlie']);
-    assert.equal(await page.locator('#selrects .hl').count(), 2);
+    await page.mouse.move(a.x, a.y, { steps: 6 }); await page.mouse.move(c.x, c.y, { steps: 10 }); await page.mouse.up();
+    const after = await page.locator('#bubble').boundingBox();
+    assert(Math.abs(after.x - before.x) > 10 || Math.abs(after.y - before.y) > 10);
+    assert.equal(await copyCount(), count);
+    assert.equal(await page.locator('#selrects .hl').count(), 0);
     assert.equal(await page.locator('.modal:not([hidden])').count(), 0);
-  });
-  await t.test('fast eraser movement selects intermediate words without duplicates', async () => {
-    const a = await word('Alpha'), c = await word('Charlie');
-    await dock(a.x, a.y - 90);
-    await page.mouse.move(a.x, a.y - 90); await page.mouse.down();
-    await page.mouse.move(a.x, a.y); await page.mouse.move(c.x, c.y); await page.mouse.move(a.x, a.y); await page.mouse.up();
-    assert.deepEqual((await lastCopy()).split(/\s+/), ['Alpha', 'Bravo', 'Charlie']);
-    await page.waitForFunction(() => document.querySelectorAll('#selrects .hl').length === 3);
   });
   await t.test('cancelled and blank strokes do not change the clipboard', async () => {
     const count = await copyCount(), a = await word('Alpha');
@@ -156,7 +177,7 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   });
   const cdp = await page.context().newCDPSession(page);
   const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id })) });
-  await t.test('touch eraser gesture copies only when the finger is released', async () => {
+  await t.test('touch-dragging the eraser leaves the clipboard and text selection unchanged', async () => {
     await page.keyboard.press('0');
     const a = await word('Alpha'), c = await word('Charlie'), count = await copyCount();
     await dock(a.x, a.y - 90);
@@ -165,11 +186,12 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
     await touch('touchMove', [[c.x, c.y, 1]]);
     assert.equal(await copyCount(), count);
     await touch('touchEnd', []);
-    await page.waitForFunction(n => window.copies.length === n + 1, count);
-    assert.deepEqual((await lastCopy()).split(/\s+/), ['Alpha', 'Bravo', 'Charlie']);
+    assert.equal(await copyCount(), count);
+    assert.equal(await page.locator('#selrects .hl').count(), 0);
   });
   await t.test('two-finger pinch zooms and subsequent touch panning moves the page', async () => {
-    await page.locator('#sel-done').click(); await page.keyboard.press('0');
+    if (await page.locator('#sel-done').isVisible()) await page.locator('#sel-done').click();
+    await page.keyboard.press('0');
     await touch('touchStart', [[180, 450, 1], [232, 450, 2]]);
     for (let i = 1; i <= 8; i++) await touch('touchMove', [[180 - i * 5, 450, 1], [232 + i * 5, 450, 2]]);
     await touch('touchEnd', []);
@@ -296,6 +318,30 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
         assert(ids(result.pdf).length > 0); assert(!ids(result.pdf).some(id => ids(sourcePdf).includes(id)));
       }
     }
+  });
+  await t.test('touch swipes do not change the PDF page; visible arrows navigate and respect page boundaries', async () => {
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden);
+    await page.locator('#file-input').setInputFiles({ name: 'two-pages.pdf', mimeType: 'application/pdf', buffer: textPdf({ pages: 2 }) });
+    await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 1 of 2');
+    assert(await page.locator('#pg-prev').isVisible()); assert(await page.locator('#pg-next').isVisible());
+    assert(await page.locator('#pg-prev').isDisabled()); assert(await page.locator('#pg-next').isEnabled());
+    await touch('touchStart', [[300, 550, 1]]);
+    for (let i = 1; i <= 8; i++) await touch('touchMove', [[300 - i * 25, 550, 1]]);
+    await touch('touchEnd', []);
+    assert.equal(await page.locator('#pg-label').textContent(), 'Page 1 of 2');
+    await page.locator('#pg-next').tap();
+    await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 2 of 2');
+    assert(await page.locator('#pg-next').isDisabled()); assert(await page.locator('#pg-prev').isEnabled());
+    await touch('touchStart', [[100, 550, 1]]);
+    for (let i = 1; i <= 8; i++) await touch('touchMove', [[100 + i * 25, 550, 1]]);
+    await touch('touchEnd', []);
+    assert.equal(await page.locator('#pg-label').textContent(), 'Page 2 of 2');
+    await page.locator('#pg-prev').tap();
+    await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 1 of 2');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 2 of 2');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 1 of 2');
   });
   await t.test('no uncaught page errors', () => assert.deepEqual(errors, []));
 });
