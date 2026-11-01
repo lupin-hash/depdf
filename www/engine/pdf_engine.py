@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import re
 import traceback
+import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -945,6 +947,100 @@ def analyze_pdf(
         doc.close()
 
 
+def preview_cleanup(path, options, password="", status=None):
+    """Describe detected items and text affected by the same page rules as Clean PDF.
+
+    This document is never saved. Original file bytes and viewer contents stay intact.
+    Text snippets contain affected original words, including partially redacted words.
+    """
+    if not (0 <= options.top_percent < 100 and 0 <= options.bottom_percent < 100) or options.top_percent + options.bottom_percent >= 100:
+        raise ValueError("Header/footer bands must cover less than the whole page.")
+    doc = open_pdf(path, password)
+    text_enabled = bool(options.top_percent or options.bottom_percent or options.custom_regions or
+                        options.watermark_phrases or options.header_phrases or options.footer_phrases or options.remove_hidden_text)
+    flags = {"text": text_enabled, "annotations": options.remove_annotations, "links": options.remove_links,
+             "attachments": True, "metadata": True,
+             "hidden": options.remove_hidden_text, "images": bool(options.remove_image_watermarks or options.image_watermark_xrefs)}
+    details = {key: {"enabled": enabled, "items": [], "total": 0} for key, enabled in flags.items()}
+    details["history"] = {"enabled": True, "total": 0, "items": [
+        {"text": "Earlier saved revisions found." if doc.xref_get_key(-1, "Prev")[0] != "null" else "No earlier save chain detected. A fresh output file will still be written."},
+        {"text": "Export removes document properties, private editing records, old thumbnails, and embedded files that might contain earlier copies."},
+        {"text": "This applies to the exported PDF only. The original file and device or cloud backups are not deleted."},
+    ]}
+    details["pages"] = {"enabled": None, "items": [], "total": len(doc)}
+    details["hidden"]["ocr_kept"] = 0
+    details["text"]["protected_matches"] = 0
+    try:
+        for key, value in (doc.metadata or {}).items():
+            if value and key not in ("format", "encryption"):
+                labels = {"title": "Title", "author": "Author", "subject": "Subject", "keywords": "Keywords",
+                          "creator": "Created with", "producer": "PDF software", "creationDate": "Created on", "modDate": "Last changed"}
+                details["metadata"]["items"].append({"text": labels.get(key, key) + ": " + str(value)})
+        if doc.get_xml_metadata():
+            details["metadata"]["items"].append({"text": "Additional document properties"})
+        for i in range(doc.embfile_count()):
+            info = doc.embfile_info(i)
+            details["attachments"]["items"].append({"text": str(info.get("filename") or info.get("name") or "Embedded file")})
+        for number, page in enumerate(doc, 1):
+            details["pages"]["items"].append({"page": number, "text": "This page is included in the analysis. Cleanup does not delete the page."})
+            for annotation in page.annots() or []:
+                info = annotation.info or {}
+                text = info.get("content") or info.get("title") or "No written note"
+                details["annotations"]["items"].append({"page": number, "text": annotation.type[1] + ": " + text})
+            for link in page.get_links():
+                target = link.get("uri") or link.get("file")
+                if not target:
+                    destination = link.get("page", -1)
+                    target = "Jump to page " + str(destination + 1) if destination >= 0 else "Document link action"
+                details["links"]["items"].append({"page": number, "text": str(target)})
+            hidden = find_hidden_text(page)
+            details["hidden"]["ocr_kept"] += hidden["ocr_protected"]
+            reason_labels = {"outside page": "Outside the visible page", "fully transparent": "Fully transparent",
+                             "invisible render mode": "Invisible text", "microscopic size": "Extremely small text",
+                             "same color as background": "Same color as the background"}
+            for item in hidden["hidden"]:
+                details["hidden"]["items"].append({"page": number, "text": item["text"], "reason": reason_labels.get(item["reason"], item["reason"])})
+        inventory, removed, missing, failed = _remove_image_layers(doc, options)
+        for xref, item in sorted(inventory.items()):
+            details["images"]["items"].append({"text": "Image " + str(xref), "reason": "Pages " + ", ".join(map(str, sorted(item["pages"]))), "will_remove": xref in removed})
+        details["images"]["unavailable"] = len(missing) + len(failed)
+        for number, page in enumerate(doc, 1):
+            if not text_enabled:
+                continue
+            if status:
+                status(f"Previewing cleanup on page {number} of {len(doc)}...")
+            before = page.get_text("words", sort=True)
+            counts = _clean_page_content(page, options)
+            details["text"]["protected_matches"] += counts["skipped_watermark_matches"] + counts["skipped_header_matches"] + counts["skipped_footer_matches"] + counts["hidden_skipped"]
+            def word_key(word):
+                return (word[4], *(round(v, 3) for v in word[:4]))
+            remaining = Counter(word_key(word) for word in page.get_text("words", sort=True))
+            affected = []
+            for word in before:
+                key = word_key(word)
+                if remaining[key]:
+                    remaining[key] -= 1
+                else:
+                    affected.append(word)
+            if affected:
+                lines, previous = [], None
+                for word in affected:
+                    line = (word[5], word[6])
+                    if line != previous:
+                        lines.append(word[4])
+                    else:
+                        lines[-1] += " " + word[4]
+                    previous = line
+                details["text"]["items"].append({"page": number, "text": "\n".join(lines), "words": len(affected)})
+                details["text"]["total"] += len(affected)
+        for key, group in details.items():
+            if key not in ("text", "pages"):
+                group["total"] = len(group["items"])
+        return details
+    finally:
+        doc.close()
+
+
 def _page_region(page, region: Tuple[float, float, float, float]):
     x0p, y0p, x1p, y1p = region
     r = page.rect
@@ -954,6 +1050,225 @@ def _page_region(page, region: Tuple[float, float, float, float]):
         r.x0 + r.width * x1p / 100.0,
         r.y0 + r.height * y1p / 100.0,
     )
+
+
+def _remove_image_layers(doc, options):
+    image_inventory = (
+        _collect_image_inventory(doc)
+        if (options.remove_image_watermarks or options.image_watermark_xrefs) else {}
+    )
+    automatic_image_xrefs = (
+        _likely_image_watermark_xrefs(image_inventory)
+        if options.remove_image_watermarks else []
+    )
+    requested_image_xrefs = set(options.image_watermark_xrefs or [])
+    target_image_xrefs = sorted(set(automatic_image_xrefs) | requested_image_xrefs)
+    missing_image_xrefs = sorted(xref for xref in requested_image_xrefs if xref not in image_inventory)
+    removed_image_xrefs: List[int] = []
+    failed_image_xrefs: List[int] = []
+    for image_xref in target_image_xrefs:
+        item = image_inventory.get(image_xref)
+        if item is None:
+            continue
+        try:
+            first_page_index = min(item["page_indices"])
+            doc[first_page_index].delete_image(image_xref)
+            removed_image_xrefs.append(image_xref)
+        except Exception:
+            failed_image_xrefs.append(image_xref)
+
+    return image_inventory, removed_image_xrefs, missing_image_xrefs, failed_image_xrefs
+
+
+def _clean_page_content(page, options):
+    """Shared page cleanup for the saved output and the in-memory analysis preview."""
+    redacted_phrase_matches = 0
+    redacted_header_matches = 0
+    redacted_footer_matches = 0
+    redacted_area_pages = 0
+    watermark_objects_removed = 0
+    skipped_watermark_matches = 0
+    skipped_header_matches = 0
+    skipped_footer_matches = 0
+    hidden_removed = 0
+    hidden_skipped = 0
+    hidden_ocr_kept = 0
+    if options.remove_hidden_text:
+        h_removed, h_skipped, h_ocr = remove_hidden_text(page)
+        hidden_removed += h_removed
+        hidden_skipped += h_skipped
+        hidden_ocr_kept += h_ocr
+    # Prefer deleting a standalone watermark text object from the page stream.
+    # This removes the watermark without redacting a rectangle over body text.
+    if options.watermark_phrases:
+        watermark_objects_removed += remove_standalone_watermark_text_objects(
+            page, options.watermark_phrases
+        )
+
+    # If a phrase is still present, only use rectangle-based redaction when
+    # its rectangle does not intersect other selectable text. This prevents a
+    # diagonal watermark's large bounding box from deleting document content.
+    phrase_jobs = (
+        [("watermark", phrase, "any") for phrase in options.watermark_phrases]
+        + [("header", phrase, "header") for phrase in options.header_phrases]
+        + [("footer", phrase, "footer") for phrase in options.footer_phrases]
+    )
+    matched_rects = {}
+    skipped_here = set()
+    for category, phrase, location in phrase_jobs:
+        for rect, guard_text in phrase_hits(page, phrase, location):
+            key = tuple(round(value, 2) for value in (rect.x0, rect.y0, rect.x1, rect.y1))
+            if _rect_overlaps_other_content(page, rect, guard_text, check_graphics=(category == "watermark")):
+                skip_key = (category, key)
+                if skip_key not in skipped_here:
+                    skipped_here.add(skip_key)
+                    if category == "watermark":
+                        skipped_watermark_matches += 1
+                    elif category == "header":
+                        skipped_header_matches += 1
+                    else:
+                        skipped_footer_matches += 1
+                continue
+            if key not in matched_rects:
+                matched_rects[key] = (rect, set())
+            matched_rects[key][1].add(category)
+
+    phrase_matches_on_page = 0
+    page_watermark_matches = 0
+    page_header_matches = 0
+    page_footer_matches = 0
+    for rect, categories in matched_rects.values():
+        try:
+            page.add_redact_annot(rect, fill=(1, 1, 1) if (categories - {"header", "footer"}) else False, cross_out=False)
+            phrase_matches_on_page += 1
+            if "watermark" in categories:
+                page_watermark_matches += 1
+            if "header" in categories:
+                page_header_matches += 1
+            if "footer" in categories:
+                page_footer_matches += 1
+        except Exception:
+            pass
+    if phrase_matches_on_page:
+        page.apply_redactions(images=0, graphics=0, text=0)
+        redacted_phrase_matches += page_watermark_matches
+        redacted_header_matches += page_header_matches
+        redacted_footer_matches += page_footer_matches
+
+    # Then remove selected bands/areas, including overlapping image and vector
+    # artwork, so image/vector watermarks can be removed when the user selects
+    # an appropriate custom region. This is intentionally destructive in-area.
+    area_rects = []
+    page_rect = page.rect
+    if options.top_percent > 0:
+        area_rects.append(fitz.Rect(
+            page_rect.x0, page_rect.y0, page_rect.x1,
+            page_rect.y0 + page_rect.height * options.top_percent / 100.0,
+        ))
+    if options.bottom_percent > 0:
+        area_rects.append(fitz.Rect(
+            page_rect.x0,
+            page_rect.y1 - page_rect.height * options.bottom_percent / 100.0,
+            page_rect.x1,
+            page_rect.y1,
+        ))
+    for region in options.custom_regions:
+        area_rects.append(_page_region(page, region))
+    for rect in area_rects:
+        try:
+            page.add_redact_annot(rect, fill=(1, 1, 1), cross_out=False)
+        except Exception:
+            pass
+    if area_rects:
+        page.apply_redactions(images=2, graphics=2, text=0)
+        redacted_area_pages += 1
+
+    return {
+        "redacted_phrase_matches": redacted_phrase_matches,
+        "redacted_header_matches": redacted_header_matches,
+        "redacted_footer_matches": redacted_footer_matches,
+        "redacted_area_pages": redacted_area_pages,
+        "watermark_objects_removed": watermark_objects_removed,
+        "skipped_watermark_matches": skipped_watermark_matches,
+        "skipped_header_matches": skipped_header_matches,
+        "skipped_footer_matches": skipped_footer_matches,
+        "hidden_removed": hidden_removed,
+        "hidden_skipped": hidden_skipped,
+        "hidden_ocr_kept": hidden_ocr_kept,
+    }
+
+
+# Known application editing records / associated source files can keep old data
+# reachable even after a non-incremental save. Clear those links before collecting
+# unreachable objects. Do not remove current page text, links or form values.
+_HISTORY_KEYS = {"PieceInfo", "Metadata", "LastModified", "CreationDate", "ModDate", "AF", "Thumb"}
+
+
+def _strip_pdf_history(doc, reset_id=True):
+    """Remove revision-related records and embedded copies from the output only."""
+    doc.scrub(
+        attached_files=True, embedded_files=True, javascript=True,
+        metadata=True, xml_metadata=True, thumbnails=True,
+        clean_pages=False, hidden_text=False, redactions=False, redact_images=0,
+        remove_links=False, reset_fields=False, reset_responses=False,
+    )
+    catalog = doc.pdf_catalog()
+    for key in ("Perms", "Collection", "DSS"):
+        doc.xref_set_key(catalog, key, "null")
+    if doc.xref_get_key(catalog, "PageMode")[1] == "/UseAttachments":
+        doc.xref_set_key(catalog, "PageMode", "/UseNone")
+    for xref in range(1, doc.xref_length()):
+        keys = set(doc.xref_get_keys(xref))
+        for key in keys & _HISTORY_KEYS:
+            doc.xref_set_key(xref, key, "null")
+        if doc.xref_get_key(xref, "Type")[1] == "/Annot":
+            # Comment contents remain unless annotation removal was selected.
+            # Their author/date/identifier records are provenance, not page text.
+            record_keys = {"M", "NM"}
+            if doc.xref_get_key(xref, "Subtype")[1] != "/Widget":
+                record_keys.add("T")  # On widgets /T is the live field name.
+            for key in keys & record_keys:
+                doc.xref_set_key(xref, key, "null")
+        if doc.xref_get_key(xref, "FT")[1] == "/Sig":
+            # A signature refers to the old file bytes and cannot survive a rewrite.
+            doc.xref_set_key(xref, "V", "null")
+    doc.xref_set_key(-1, "Info", "null")
+    if reset_id:
+        doc.xref_set_key(-1, "ID", "null")
+
+
+def _save_history_free(doc, destination):
+    """Publish only a verified full rewrite; never expose a partial export."""
+    save_args = dict(incremental=False, garbage=3, clean=True,
+                     deflate=True, encryption=fitz.PDF_ENCRYPT_NONE,
+                     no_new_id=False, preserve_metadata=False)
+    encrypted_source = doc.xref_get_key(-1, "Encrypt")[0] != "null"
+    with tempfile.TemporaryDirectory(prefix="depdf-history-", dir=str(Path(destination).parent)) as folder:
+        staged = Path(folder) / "checked-export.pdf"
+        if encrypted_source:
+            # The original ID can participate in stream decryption. Preserve it
+            # while producing a private decrypted rewrite; reset IDs afterward.
+            _strip_pdf_history(doc, reset_id=False)
+            intermediate = Path(folder) / "decrypted.pdf"
+            doc.save(str(intermediate), **save_args)
+            with fitz.open(str(intermediate)) as decrypted:
+                _strip_pdf_history(decrypted)
+                decrypted.save(str(staged), **save_args)
+        else:
+            _strip_pdf_history(doc)
+            doc.save(str(staged), **save_args)
+        with fitz.open(str(staged)) as check:
+            if check.xref_get_key(-1, "Prev")[0] != "null":
+                raise RuntimeError("The exported PDF still contains a previous-revision reference.")
+            if check.xref_get_key(-1, "Info")[0] != "null" or check.get_xml_metadata():
+                raise RuntimeError("The exported PDF still contains document metadata.")
+            if check.embfile_count():
+                raise RuntimeError("The exported PDF still contains embedded files.")
+            for xref in range(1, check.xref_length()):
+                for key in set(check.xref_get_keys(xref)) & _HISTORY_KEYS:
+                    if check.xref_get_key(xref, key)[0] != "null":
+                        raise RuntimeError("The exported PDF still contains an editing-history record.")
+        os.replace(str(staged), str(destination))
 
 
 def clean_pdf(
@@ -1002,29 +1317,7 @@ def clean_pdf(
         # Snapshot visible image placements before changing page streams. Automatic
         # detection only selects large, mostly transparent images; the manual XRef
         # field lets a user explicitly select image watermarks that use other methods.
-        image_inventory = (
-            _collect_image_inventory(doc)
-            if (options.remove_image_watermarks or options.image_watermark_xrefs) else {}
-        )
-        automatic_image_xrefs = (
-            _likely_image_watermark_xrefs(image_inventory)
-            if options.remove_image_watermarks else []
-        )
-        requested_image_xrefs = set(options.image_watermark_xrefs or [])
-        target_image_xrefs = sorted(set(automatic_image_xrefs) | requested_image_xrefs)
-        missing_image_xrefs = sorted(xref for xref in requested_image_xrefs if xref not in image_inventory)
-        removed_image_xrefs: List[int] = []
-        failed_image_xrefs: List[int] = []
-        for image_xref in target_image_xrefs:
-            item = image_inventory.get(image_xref)
-            if item is None:
-                continue
-            try:
-                first_page_index = min(item["page_indices"])
-                doc[first_page_index].delete_image(image_xref)
-                removed_image_xrefs.append(image_xref)
-            except Exception:
-                failed_image_xrefs.append(image_xref)
+        image_inventory, removed_image_xrefs, missing_image_xrefs, failed_image_xrefs = _remove_image_layers(doc, options)
 
         say(
             f"Opened {src.name} ({page_count} pages). "
@@ -1033,95 +1326,18 @@ def clean_pdf(
 
         for page_index in range(page_count):
             page = doc[page_index]
-            if options.remove_hidden_text:
-                h_removed, h_skipped, h_ocr = remove_hidden_text(page)
-                hidden_removed += h_removed
-                hidden_skipped += h_skipped
-                hidden_ocr_kept += h_ocr
-            # Prefer deleting a standalone watermark text object from the page stream.
-            # This removes the watermark without redacting a rectangle over body text.
-            if options.watermark_phrases:
-                watermark_objects_removed += remove_standalone_watermark_text_objects(
-                    page, options.watermark_phrases
-                )
-
-            # If a phrase is still present, only use rectangle-based redaction when
-            # its rectangle does not intersect other selectable text. This prevents a
-            # diagonal watermark's large bounding box from deleting document content.
-            phrase_jobs = (
-                [("watermark", phrase, "any") for phrase in options.watermark_phrases]
-                + [("header", phrase, "header") for phrase in options.header_phrases]
-                + [("footer", phrase, "footer") for phrase in options.footer_phrases]
-            )
-            matched_rects = {}
-            skipped_here = set()
-            for category, phrase, location in phrase_jobs:
-                for rect, guard_text in phrase_hits(page, phrase, location):
-                    key = tuple(round(value, 2) for value in (rect.x0, rect.y0, rect.x1, rect.y1))
-                    if _rect_overlaps_other_content(page, rect, guard_text, check_graphics=(category == "watermark")):
-                        skip_key = (category, key)
-                        if skip_key not in skipped_here:
-                            skipped_here.add(skip_key)
-                            if category == "watermark":
-                                skipped_watermark_matches += 1
-                            elif category == "header":
-                                skipped_header_matches += 1
-                            else:
-                                skipped_footer_matches += 1
-                        continue
-                    if key not in matched_rects:
-                        matched_rects[key] = (rect, set())
-                    matched_rects[key][1].add(category)
-
-            phrase_matches_on_page = 0
-            page_watermark_matches = 0
-            page_header_matches = 0
-            page_footer_matches = 0
-            for rect, categories in matched_rects.values():
-                try:
-                    page.add_redact_annot(rect, fill=(1, 1, 1) if (categories - {"header", "footer"}) else False, cross_out=False)
-                    phrase_matches_on_page += 1
-                    if "watermark" in categories:
-                        page_watermark_matches += 1
-                    if "header" in categories:
-                        page_header_matches += 1
-                    if "footer" in categories:
-                        page_footer_matches += 1
-                except Exception:
-                    pass
-            if phrase_matches_on_page:
-                page.apply_redactions(images=0, graphics=0, text=0)
-                redacted_phrase_matches += page_watermark_matches
-                redacted_header_matches += page_header_matches
-                redacted_footer_matches += page_footer_matches
-
-            # Then remove selected bands/areas, including overlapping image and vector
-            # artwork, so image/vector watermarks can be removed when the user selects
-            # an appropriate custom region. This is intentionally destructive in-area.
-            area_rects = []
-            page_rect = page.rect
-            if options.top_percent > 0:
-                area_rects.append(fitz.Rect(
-                    page_rect.x0, page_rect.y0, page_rect.x1,
-                    page_rect.y0 + page_rect.height * options.top_percent / 100.0,
-                ))
-            if options.bottom_percent > 0:
-                area_rects.append(fitz.Rect(
-                    page_rect.x0,
-                    page_rect.y1 - page_rect.height * options.bottom_percent / 100.0,
-                    page_rect.x1,
-                    page_rect.y1,
-                ))
-            for region in options.custom_regions:
-                area_rects.append(_page_region(page, region))
-            for rect in area_rects:
-                try:
-                    page.add_redact_annot(rect, fill=(1, 1, 1), cross_out=False)
-                except Exception:
-                    pass
-            if area_rects:
-                page.apply_redactions(images=2, graphics=2, text=0)
-                redacted_area_pages += 1
+            counts = _clean_page_content(page, options)
+            redacted_phrase_matches += counts["redacted_phrase_matches"]
+            redacted_header_matches += counts["redacted_header_matches"]
+            redacted_footer_matches += counts["redacted_footer_matches"]
+            redacted_area_pages += counts["redacted_area_pages"]
+            watermark_objects_removed += counts["watermark_objects_removed"]
+            skipped_watermark_matches += counts["skipped_watermark_matches"]
+            skipped_header_matches += counts["skipped_header_matches"]
+            skipped_footer_matches += counts["skipped_footer_matches"]
+            hidden_removed += counts["hidden_removed"]
+            hidden_skipped += counts["hidden_skipped"]
+            hidden_ocr_kept += counts["hidden_ocr_kept"]
 
             if True:
                 say(f"Processing page {page_index + 1} of {page_count}...")
@@ -1193,10 +1409,7 @@ def clean_pdf(
             )
 
         say("Saving optimized output copy...")
-        if dst.exists():
-            dst.unlink()
-        big = page_count >= 100 or src.stat().st_size >= 30 * 1024 * 1024
-        doc.save(str(dst), garbage=3 if big else 4, deflate=True, clean=not big, encryption=fitz.PDF_ENCRYPT_NONE)
+        _save_history_free(doc, dst)
         if not dst.is_file() or dst.stat().st_size == 0:
             raise RuntimeError("The output PDF was not created correctly.")
 
@@ -1217,11 +1430,14 @@ def clean_pdf(
             f"Pages with band/custom-area redactions: {redacted_area_pages}",
             f"Hidden/tracker text removed: {hidden_removed if options.remove_hidden_text else 'Off'}"
             + (f" (skipped {hidden_skipped} overlapping visible text; kept {hidden_ocr_kept} OCR-layer span(s))" if options.remove_hidden_text else ""),
-            f"Metadata removed: {'Yes' if options.remove_metadata else 'No'}",
+            "Metadata removed: Yes (always cleared on export)",
+            "Saved file history: earlier revisions, private editing data and cached thumbnails discarded",
+            "Embedded files and document scripts: Removed (may contain older copies)",
+            "Document identifiers: Regenerated",
             "Output encryption: Disabled (the saved PDF will not require a password)",
             f"Annotations removed: {'Yes' if options.remove_annotations else 'No'}",
             f"Hyperlinks removed: {'Yes' if options.remove_links else 'No'}",
-            f"Attachments/JavaScript cleanup: {'Yes' if options.remove_attachments_js else 'No'}",
+            "Attachments/JavaScript cleanup: Yes (always cleared on export)",
             f"Output size: {dst.stat().st_size / 1024:.1f} KB",
         ]
         return "\n".join(report)
@@ -1230,7 +1446,7 @@ def clean_pdf(
 
 
 def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
-    """Save an unencrypted copy without applying content-cleanup operations."""
+    """Save an unencrypted, history-cleaned copy without removing page content."""
     src = Path(input_path).expanduser().resolve()
     dst = Path(output_path).expanduser().resolve()
     if not src.is_file():
@@ -1247,14 +1463,7 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
     doc = open_pdf(str(src), password)
     try:
         page_count = len(doc)
-        if dst.exists():
-            dst.unlink()
-        doc.save(
-            str(dst),
-            garbage=3 if (page_count >= 100 or src.stat().st_size >= 30 * 1024 * 1024) else 4,
-            deflate=True,
-            encryption=fitz.PDF_ENCRYPT_NONE,
-        )
+        _save_history_free(doc, dst)
     finally:
         doc.close()
 
@@ -1274,6 +1483,8 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
     return "\n".join([
         f"Unlocked copy saved: {dst}",
         f"Pages preserved: {page_count}",
+        "Saved file history, document metadata, embedded files and scripts: Cleared",
+        "Document identifiers: Regenerated",
         (
             "Password protection: Removed (output opens without a password)"
             if source_required_password
@@ -1287,7 +1498,7 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Helpers added for the phone/tablet app (the functions above are the original
-# desktop engine, unchanged).
+# desktop engine, including the shared export-history cleanup).
 # ---------------------------------------------------------------------------
 import json
 
@@ -1440,6 +1651,24 @@ def _emit(message: str) -> None:
         pass
 
 
+def _options_from_job(o):
+    return CleanOptions(
+        remove_metadata=True,
+        top_percent=float(o.get("top", 0)),
+        bottom_percent=float(o.get("bottom", 0)),
+        watermark_phrases=parse_phrases(o.get("watermark", "")),
+        header_phrases=parse_phrases(o.get("header", "")),
+        footer_phrases=parse_phrases(o.get("footer", "")),
+        custom_regions=parse_regions(o.get("regions", "")),
+        remove_image_watermarks=bool(o.get("remove_image_watermarks", True)),
+        image_watermark_xrefs=parse_image_xrefs(o.get("xrefs", "")),
+        remove_annotations=bool(o.get("remove_annotations", False)),
+        remove_links=bool(o.get("remove_links", False)),
+        remove_attachments_js=True,
+        remove_hidden_text=bool(o.get("remove_hidden_text", False)),
+    )
+
+
 def run_job(job_json: str) -> str:
     """Entry point used by the web worker. Takes/returns JSON strings."""
     job = json.loads(job_json)
@@ -1451,25 +1680,15 @@ def run_job(job_json: str) -> str:
             parse_phrases(job.get("header", "")), parse_phrases(job.get("footer", "")),
             status=_emit,
         )
-        return json.dumps({"ok": True, "report": text})
+        options = _options_from_job(job.get("options", {
+            "watermark": job.get("watermark", ""), "header": job.get("header", ""), "footer": job.get("footer", ""),
+        }))
+        details = preview_cleanup(job["input"], options, pw, status=_emit)
+        return json.dumps({"ok": True, "report": text, "details": details})
     if kind == "unlock":
         return json.dumps({"ok": True, "report": unlock_pdf(job["input"], job["output"], pw)})
     if kind == "clean":
         o = job["options"]
-        opts = CleanOptions(
-            remove_metadata=bool(o["remove_metadata"]),
-            top_percent=float(o["top"]),
-            bottom_percent=float(o["bottom"]),
-            watermark_phrases=parse_phrases(o.get("watermark", "")),
-            header_phrases=parse_phrases(o.get("header", "")),
-            footer_phrases=parse_phrases(o.get("footer", "")),
-            custom_regions=parse_regions(o.get("regions", "")),
-            remove_image_watermarks=bool(o["remove_image_watermarks"]),
-            image_watermark_xrefs=parse_image_xrefs(o.get("xrefs", "")),
-            remove_annotations=bool(o["remove_annotations"]),
-            remove_links=bool(o["remove_links"]),
-            remove_attachments_js=bool(o["remove_extras"]),
-            remove_hidden_text=bool(o.get("remove_hidden_text", False)),
-        )
+        opts = _options_from_job(o)
         return json.dumps({"ok": True, "report": clean_pdf(job["input"], job["output"], opts, status=_emit, password=pw)})
     raise ValueError("Unknown job: " + kind)
