@@ -240,9 +240,17 @@
   <div class="modal-card wide">
     <div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="ma-title">Analysis</h2></div>
     <p class="an-sub" id="an-sub"></p>
+    <p class="an-hint">Tap a summary box to see what was found and what your settings would remove. Analyze again after changing settings.</p>
     <div class="an-grid" id="an-grid"></div>
+    <section class="an-detail" id="an-detail" aria-labelledby="an-detail-title" hidden>
+      <div class="an-detail-head"><h3 id="an-detail-title" tabindex="-1"></h3><button class="btn ghost sm" id="an-detail-close" type="button">Close details</button></div>
+      <p id="an-detail-description"></p>
+      <div id="an-detail-status"></div>
+      <div id="an-detail-list"></div>
+      <button class="btn ghost sm" id="an-detail-more" type="button" hidden>Show more</button>
+    </section>
     <ul class="an-list" id="an-matches" hidden></ul>
-    <p class="an-label">Clean PDF will remove</p>
+    <p class="an-label">Selected cleanup settings — tap for details</p>
     <div class="an-chiprow" id="an-plan"></div>
     <div id="an-chips-slot"></div>
     <details class="an-details">
@@ -368,11 +376,12 @@
 <div class="modal" data-parent="modal-opts" id="modal-other" role="dialog" aria-modal="true" aria-labelledby="mx-title" hidden>
   <div class="modal-card">
     <div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="mx-title">Others</h2></div>
+    <p class="hint">Saved PDF revisions, editing records and old thumbnails are cleared on export. Your original PDF and external backups stay unchanged.</p>
     <div class="switches">
-      <label class="switch"><input type="checkbox" id="opt-meta" checked><span class="track"></span><span class="txt"><b>Remove metadata</b><small>Recommended</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-meta" checked disabled><span class="track"></span><span class="txt"><b>Clear document properties</b><small>Always removed from cleaned and unlocked exports</small></span></label>
       <label class="switch"><input type="checkbox" id="opt-annots"><span class="track"></span><span class="txt"><b>Remove annotations</b><small>Comments and stamps</small></span></label>
       <label class="switch"><input type="checkbox" id="opt-links"><span class="track"></span><span class="txt"><b>Remove hyperlinks</b><small>Page links</small></span></label>
-      <label class="switch"><input type="checkbox" id="opt-extras"><span class="track"></span><span class="txt"><b>Remove attachments &amp; scripts</b><small>Embedded files</small></span></label>
+      <label class="switch"><input type="checkbox" id="opt-extras" checked disabled><span class="track"></span><span class="txt"><b>Clear embedded files &amp; scripts</b><small>Always removed: attached files may contain older copies</small></span></label>
       <label class="switch"><input type="checkbox" id="opt-hidden"><span class="track"></span><span class="txt"><b>Remove hidden / tracker text</b><small>Invisible, tiny or off-page. OCR kept.</small></span></label>
     </div>
     <button class="btn primary" type="button" data-close>Done</button>

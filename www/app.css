@@ -580,3 +580,19 @@ body { padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px))
 /* Fit to the actual stage width, including the native safe-area gutters. */
 #card-preview .pagebox { max-width: 100%; }
 #card-preview .stage #prev-img { max-width: 100%; }
+
+/* Analysis: accessible summary buttons and plain-language removal previews. */
+.an-hint { font-size: 13px; }
+.an-tile { text-align: left; appearance: none; touch-action: manipulation; }
+.an-tile small { font-size: 11px; color: var(--accent); }
+.an-tile[aria-expanded="true"], .an-chip[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.an-detail { border: 1px solid var(--line); background: var(--surface-2); border-radius: 16px; padding: 14px; min-width: 0; }
+.an-detail[hidden] { display: none; }
+.an-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.an-detail h3 { margin: 0; font-size: 16px; }
+.an-detail > p, #an-detail-status p { font-size: 13px; line-height: 1.55; margin: 10px 0; overflow-wrap: anywhere; }
+.an-entry { padding: 12px; margin: 10px 0; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.an-entry h4 { font-size: 13px; margin: 0 0 8px; overflow-wrap: anywhere; }
+.an-entry p, .an-entry summary { font-size: 12px; margin: 6px 0; }
+.an-entry pre { margin: 0; font: inherit; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.an-chip { font: inherit; cursor: pointer; }

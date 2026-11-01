@@ -15,7 +15,7 @@
     top: "0", bottom: "0", regions: "", v: 3,
     header: "", footer: "",
     watermark: "", imgWm: true, xrefs: "",
-    meta: true, annots: false, links: false, extras: false, hidden: false,
+    meta: true, annots: false, links: false, extras: true, hidden: false,
     autoUpdate: false,
     theme: "eraser", accent: 0, lite: LITE_AUTO,
   };
@@ -276,7 +276,7 @@
     el.top.value = s.top; el.bottom.value = s.bottom; el.regions.value = s.regions;
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
-    el.meta.checked = !!s.meta; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = !!s.extras; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate; el.lite.checked = !!s.lite; applyLite();
+    el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate; el.lite.checked = !!s.lite; applyLite();
     look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "eraser";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
     applyAppearance();
@@ -325,10 +325,10 @@
     if (!(top >= 0 && top < 100) || !(bottom >= 0 && bottom < 100)) throw new Error("Top/header and bottom/footer values must be from 0 to less than 100.");
     if (top + bottom >= 100) throw new Error("Top/header and bottom/footer bands together must cover less than 100% of a page.");
     return {
-      remove_metadata: el.meta.checked, top, bottom,
+      remove_metadata: true, top, bottom,
       watermark: el.watermark.value, header: el.header.value, footer: el.footer.value,
       regions: el.regions.value, remove_image_watermarks: el.imgWm.checked, xrefs: el.xrefs.value,
-      remove_annotations: el.annots.checked, remove_links: el.links.checked, remove_extras: el.extras.checked,
+      remove_annotations: el.annots.checked, remove_links: el.links.checked, remove_extras: true,
       remove_hidden_text: el.hidden.checked,
     };
   }
@@ -913,12 +913,13 @@
   el.btnAnalyze.addEventListener("click", async () => {
     if (state.busy) return;
     let input;
-    try { input = requireInput(); } catch (e) { toast(e.message, true); return; }
+    let options;
+    try { input = requireInput(); options = getOptions(); } catch (e) { toast(e.message, true); return; }
     setBusy(true, "Analyzing PDF…", "Analyzing PDF", bigFileNote(state.file, state.pages)); startEta(getSpp() * 0.5 * state.pages); writeReport("Analysis running…");
     try {
-      const r = await rpc("job", { job: { kind: "analyze", input, password: state.pw, watermark: el.watermark.value, header: el.header.value, footer: el.footer.value } });
+      const r = await rpc("job", { job: { kind: "analyze", input, options, password: state.pw, watermark: el.watermark.value, header: el.header.value, footer: el.footer.value } });
       writeReport(r.report);
-      lastXrefs = parseXrefs(r.report); renderXrefChips(); renderAnalysis(r.report);
+      lastXrefs = parseXrefs(r.report); renderXrefChips(); renderAnalysis(r.report, r.details);
       setBusy(false, "Analysis complete"); openModal("modal-analysis");
     } catch (err) { if (err.cancelled) { await afterCancel(false); return; } fail("Analysis failed", err); }
   });
@@ -1737,9 +1738,88 @@
   /* ------------------------------------------------------------------ *
    * Analysis summary                                                   *
    * ------------------------------------------------------------------ */
+  const ANALYSIS_INFO = {
+    history: { title: "Saved file history", description: "Every cleaned or unlocked export is written as a new PDF. Earlier saved revisions, document properties, known private editing records, old thumbnails, and embedded files are cleared. This does not erase the original PDF or copies in device or cloud backups." },
+    text: { title: "Text affected by cleanup", description: "These are the original words affected by your selected settings. A selected area can remove part of a word. This is a preview: nothing has been removed yet. Words inside scanned pictures cannot be listed here." },
+    pages: { title: "Pages checked", description: "All listed pages were checked. Cleaning changes their contents; it does not delete the pages." },
+    pdfs: { title: "PDFs checked", description: "These files are included in this batch analysis." },
+    annotations: { title: "Notes, comments and stamps", description: "These are added notes or marks, separate from the page’s main text. Their written contents are shown below." },
+    links: { title: "Clickable links", description: "These are web addresses or page-jump actions. Removing a link stops it being clickable; the printed words stay on the page." },
+    attachments: { title: "Files inside the PDF", description: "These are files stored inside the PDF, not its normal pages. This cleanup setting also removes automatic document scripts, which are not listed here." },
+    metadata: { title: "Document properties", description: "These are details such as the title, author and software used to create the PDF. Removing them does not erase visible text on its pages." },
+    hidden: { title: "Hidden text", description: "This text is hard or impossible to see. Searchable text layers on scanned pages are protected. The Text to remove card shows the actual affected page text after safety checks." },
+    images: { title: "Images and picture watermarks", description: "Only images marked for removal are selected by your settings. Text inside a picture cannot be shown as selectable words here." },
+  };
+  let analysisSources = [], analysisTrigger = null;
+  function analysisKey(label) {
+    if (/^(File history|Saved file history)/.test(label)) return "history";
+    if (/^PDFs$/.test(label)) return "pdfs";
+    if (/^Pages$/.test(label)) return "pages";
+    if (/^Hidden/.test(label)) return "hidden";
+    if (/^Annotations/.test(label)) return "annotations";
+    if (/^Links/.test(label)) return "links";
+    if (/^Attachments/.test(label)) return "attachments";
+    if (/^Metadata/.test(label)) return "metadata";
+    if (/^Images|^Image watermarks/.test(label)) return "images";
+    return "text";
+  }
+  function closeAnalysisDetail(restoreFocus = true) {
+    $("#an-detail").hidden = true;
+    $$("[aria-controls=an-detail]").forEach(b => b.setAttribute("aria-expanded", "false"));
+    if (restoreFocus) analysisTrigger?.focus();
+    analysisTrigger = null;
+  }
+  $("#an-detail-close").addEventListener("click", () => closeAnalysisDetail());
+  function openAnalysisDetail(key, trigger) {
+    const info = ANALYSIS_INFO[key], panel = $("#an-detail"), statuses = $("#an-detail-status"), list = $("#an-detail-list"), more = $("#an-detail-more");
+    if (analysisTrigger === trigger && !panel.hidden) { closeAnalysisDetail(); return; }
+    closeAnalysisDetail(false); analysisTrigger = trigger; trigger.setAttribute("aria-expanded", "true");
+    $("#an-detail-title").textContent = info.title;
+    $("#an-detail-description").textContent = (trigger.querySelector("span")?.textContent === "Text characters" ? "The character count includes all selectable text. Only the words listed below would be affected by cleanup. " : "") + info.description;
+    statuses.replaceChildren(); list.replaceChildren();
+    const entries = [];
+    for (const source of analysisSources) {
+      const group = key === "pdfs" ? { items: [{ text: "Included in this batch" }], enabled: null } : source.details?.[key];
+      const status = document.createElement("p");
+      let message = "Detailed preview is unavailable. Analyze this PDF again.";
+      if (group) {
+        if (key === "pdfs" || key === "pages") message = "Included in this analysis.";
+        else if (key === "text") message = !group.enabled ? "No text removal is selected. Page text will be kept." : group.total ? `${group.total} words would be affected on ${group.items.length} ${group.items.length === 1 ? "page" : "pages"}.` : "No selectable words would be changed by these settings.";
+        else if (key === "images") message = "Images marked for removal: " + group.items.filter(i => i.will_remove).length + ". Other images will be kept.";
+        else message = group.enabled ? "Removal is ON for this category." : "Removal is OFF. These items will be kept.";
+        if (!group.items.length && key !== "text") message += " None found.";
+        if (group.ocr_kept) message += ` ${group.ocr_kept} searchable text sections are protected and kept.`;
+        if (group.protected_matches) message += ` ${group.protected_matches} matching items were kept to protect other visible content.`;
+        if (group.unavailable) message += ` ${group.unavailable} requested images could not be removed in this preview.`;
+        group.items.forEach(item => entries.push({ ...item, file: source.name }));
+      }
+      status.textContent = source.name + ": " + message; statuses.append(status);
+    }
+    let cursor = 0;
+    function appendMore() {
+      for (const entry of entries.slice(cursor, cursor + 20)) {
+        const article = document.createElement("article"); article.className = "an-entry";
+        const title = document.createElement("h4"); title.textContent = entry.file + (entry.page ? " — Page " + entry.page : ""); article.append(title);
+        if (entry.reason || key === "images") {
+          const reason = document.createElement("p"); reason.textContent = [entry.reason, key === "images" ? (entry.will_remove ? "Marked for removal" : "Will be kept") : ""].filter(Boolean).join(" · "); article.append(reason);
+        }
+        const text = String(entry.text || ""), preview = document.createElement("pre"); preview.textContent = text.length > 600 ? text.slice(0, 600) + "…" : text; article.append(preview);
+        if (text.length > 600) {
+          const full = document.createElement("details"), summary = document.createElement("summary"), content = document.createElement("pre");
+          summary.textContent = "Show all text for this entry"; content.textContent = text; full.append(summary, content); article.append(full);
+        }
+        list.append(article);
+      }
+      cursor = Math.min(entries.length, cursor + 20); more.hidden = cursor >= entries.length;
+      more.textContent = `Show more (${entries.length - cursor} remaining)`;
+    }
+    more.onclick = appendMore; appendMore(); panel.hidden = false;
+    $("#an-detail-title").focus({ preventScroll: true });
+    panel.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }
   function plannedActions() {
     const n = (v) => parseFloat(String(v || "0").replace(",", ".")) || 0;
-    const out = [];
+    const out = ["Saved file history"];
     if (el.meta.checked) out.push("Metadata");
     if (el.annots.checked) out.push("Annotations");
     if (el.links.checked) out.push("Links");
@@ -1756,23 +1836,28 @@
     return out;
   }
   function parseReport(text) {
-    const num = (re) => { const m = text.match(re); return m ? Number(m[1]) : null; };
+    const num = (re) => { const m = text.match(re); return m ? Number(m[1].replace(/,/g, "")) : null; };
     const mfields = num(/^Standard metadata fields with values:\s*(\d+)/m);
     const phrase = text.match(/Configured text phrase scan:\n((?:[ \t]+.*\n?)+)/);
     return {
-      pages: num(/^Pages:\s*(\d+)/m), chars: num(/^Selectable text characters:\s*(\d+)/m), annots: num(/^Annotations\/stamps:\s*(\d+)/m),
+      pages: num(/^Pages:\s*(\d+)/m), chars: num(/^Selectable text characters:\s*([\d,]+)/m), annots: num(/^Annotations\/stamps:\s*(\d+)/m),
       links: num(/^Hyperlinks:\s*(\d+)/m), atts: num(/^Embedded attachments:\s*(\d+)/m), hidden: num(/^Hidden\/tracker text spans:\s*(\d+)/m),
-      hasMeta: /^XMP metadata:\s*found/im.test(text) || mfields > 0, images: (text.match(/^\s*XRef \d+:/gm) || []).length,
+      hasMeta: /^XMP metadata:\s*(found|present)/im.test(text) || mfields > 0, images: (text.match(/^\s*XRef \d+:/gm) || []).length,
       matches: phrase ? phrase[1].split("\n").map((l) => l.trim().replace(/^[•*-]\s*/, "")).filter(Boolean) : [],
     };
   }
-  function showAnalysis(tiles, sub, lines, report, cleanLabel) {
+  function showAnalysis(tiles, sub, lines, report, cleanLabel, sources) {
+    analysisSources = sources; closeAnalysisDetail(false);
     const grid = $("#an-grid"); grid.textContent = "";
     tiles.forEach(([label, value, tone]) => {
-      const t = document.createElement("div"); t.className = "an-tile" + (tone ? " " + tone : "");
+      const t = document.createElement("button"); t.type = "button"; t.className = "an-tile" + (tone ? " " + tone : "");
       const b = document.createElement("b"); b.textContent = String(value);
       const sp = document.createElement("span"); sp.textContent = label;
-      t.append(b, sp); grid.append(t);
+      const key = analysisKey(label);
+      const hint = document.createElement("small"); hint.textContent = "Tap for details";
+      t.setAttribute("aria-controls", "an-detail"); t.setAttribute("aria-expanded", "false");
+      t.addEventListener("click", () => openAnalysisDetail(key, t));
+      t.append(b, sp, hint); grid.append(t);
     });
     $("#an-sub").textContent = sub;
     const ul = $("#an-matches"); ul.textContent = "";
@@ -1781,24 +1866,28 @@
     const plan = $("#an-plan"); plan.textContent = "";
     const list = plannedActions();
     (list.length ? list : ["Nothing selected"]).forEach((x) => {
-      const c = document.createElement("span"); c.className = "an-chip" + (list.length ? "" : " none"); c.textContent = x; plan.append(c);
+      const c = document.createElement("button"); c.type = "button"; c.className = "an-chip" + (list.length ? "" : " none"); c.textContent = x;
+      c.disabled = !list.length; c.setAttribute("aria-controls", "an-detail"); c.setAttribute("aria-expanded", "false");
+      c.addEventListener("click", () => openAnalysisDetail(analysisKey(x), c)); plan.append(c);
     });
     $("#an-clean span").textContent = cleanLabel;
     writeReport(report);
   }
-  function renderAnalysis(text) {
+  function renderAnalysis(text, details) {
     const r = parseReport(text);
     showAnalysis([
       ["Pages", r.pages == null ? "?" : r.pages, ""],
+      ["File history", "Will clear", "ok"],
+      ["Text to remove", details?.text ? details.text.total + " words" : "?", details?.text.total ? "warn" : "ok"],
       ["Text characters", r.chars === 0 ? "None" : r.chars == null ? "?" : r.chars.toLocaleString(), r.chars === 0 ? "warn" : ""],
       ["Annotations", r.annots || 0, r.annots ? "warn" : "ok"], ["Links", r.links || 0, r.links ? "warn" : "ok"],
       ["Attachments", r.atts || 0, r.atts ? "warn" : "ok"], ["Metadata", r.hasMeta ? "Found" : "None", r.hasMeta ? "warn" : "ok"],
-      ["Hidden text", r.hidden || 0, r.hidden ? "warn" : "ok"], ["Images", r.images, ""],
-    ], state.file ? state.file.name + (r.pages ? " · " + r.pages + " pages" : "") : "", r.matches, text, "Clean PDF");
+      ["Hidden text", r.hidden || 0, r.hidden ? "warn" : "ok"], ["Images", details?.images.total ?? r.images, ""],
+    ], state.file ? state.file.name + (r.pages ? " · " + r.pages + " pages" : "") : "", r.matches, text, "Clean PDF", [{ name: state.file?.name || "PDF", details }]);
   }
   /* batch: totals for every PDF, plus one line per PDF that has something to clean */
   function renderBatchAnalysis(results) {
-    const parts = results.map(({ it, report }) => ({ n: batch.items.indexOf(it) + 1, it, r: parseReport(report), report }));
+    const parts = results.map(({ it, report, details }) => ({ n: batch.items.indexOf(it) + 1, it, r: parseReport(report), report, details }));
     const sum = (k) => parts.reduce((a, p) => a + (p.r[k] || 0), 0);
     const pages = sum("pages"), chars = sum("chars"), annots = sum("annots"), links = sum("links"), atts = sum("atts"), hidden = sum("hidden");
     const withMeta = parts.filter((p) => p.r.hasMeta).length;
@@ -1812,11 +1901,13 @@
     });
     showAnalysis([
       ["PDFs", parts.length, ""], ["Pages", pages, ""],
+      ["File history", "Will clear", "ok"],
+      ["Text to remove", parts.reduce((n, p) => n + (p.details?.text.total || 0), 0) + " words", ""],
       ["Text characters", chars === 0 ? "None" : chars.toLocaleString(), chars === 0 ? "warn" : ""],
       ["Annotations", annots, annots ? "warn" : "ok"], ["Links", links, links ? "warn" : "ok"], ["Attachments", atts, atts ? "warn" : "ok"],
       ["Metadata", withMeta ? withMeta + " of " + parts.length : "None", withMeta ? "warn" : "ok"], ["Hidden text", hidden, hidden ? "warn" : "ok"],
     ], parts.length + (parts.length > 1 ? " PDFs · " : " PDF · ") + pages + " pages", lines,
-      parts.map((p) => "=== #" + p.n + " " + p.it.name + " ===\n" + p.report).join("\n"), "Clean all PDFs");
+      parts.map((p) => "=== #" + p.n + " " + p.it.name + " ===\n" + p.report).join("\n"), "Clean all PDFs", parts.map(p => ({ name: p.it.name, details: p.details })));
     lastXrefs = []; renderXrefChips();
   }
 
@@ -1830,7 +1921,7 @@
   function applyOptions(o) {
     el.top.value = o.top; el.bottom.value = o.bottom; el.regions.value = o.regions; el.header.value = o.header; el.footer.value = o.footer;
     el.watermark.value = o.watermark; el.imgWm.checked = !!o.imgWm; el.xrefs.value = o.xrefs;
-    el.meta.checked = !!o.meta; el.annots.checked = !!o.annots; el.links.checked = !!o.links; el.extras.checked = !!o.extras; el.hidden.checked = !!o.hidden;
+    el.meta.checked = true; el.annots.checked = !!o.annots; el.links.checked = !!o.links; el.extras.checked = true; el.hidden.checked = !!o.hidden;
     syncRange(el.top, el.topRange); syncRange(el.bottom, el.bottomRange); renderOverlay(); renderXrefChips();
   }
   const sameOpts = (a, b) => OPT_KEYS.every((k) => a[k] === b[k]);
@@ -2074,6 +2165,9 @@
     const targets = batch.items.filter((it) => !isLocked(it));
     if (!targets.length) { toast("No unlocked PDFs to analyze.", true); return; }
     const snap = snapOptions(), results = [];
+    try { targets.forEach(it => { applyOptions(it.opts || snap); getOptions(); }); }
+    catch (err) { applyOptions(snap); toast(err.message, true); return; }
+    applyOptions(snap);
     setBusy(true, "Analyzing…", "Analyzing PDFs", batchNote(targets.map((t) => t.file)));
     startEta(0);
     try {
@@ -2083,8 +2177,9 @@
         el.ovlTitle.textContent = "Analyzing PDF " + (k + 1) + " of " + targets.length;
         setStatus(it.name);
         await ensureItem(it);
-        const r = await rpc("job", { job: { kind: "analyze", input: it.work, password: "", watermark: o.watermark, header: o.header, footer: o.footer } });
-        results.push({ it, report: r.report });
+        applyOptions(o); const options = getOptions(); applyOptions(snap);
+        const r = await rpc("job", { job: { kind: "analyze", input: it.work, password: "", options, watermark: o.watermark, header: o.header, footer: o.footer } });
+        results.push({ it, report: r.report, details: r.details });
       }
     } catch (err) {
       if (err.cancelled) { await afterCancel(true); return; }
