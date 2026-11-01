@@ -24,11 +24,19 @@ minSdk 24 (Android 7.0), targetSdk 36. Requires a reasonably current Android Sys
 
 The web app lives in `www/` (`index.html`, `app.css`, `app.js`, `worker.js`, `engine/pdf_engine.py`, `vendor/`). Edit these source files, then run `npm run sync:android` to refresh the Android assets. Compile only when you want to test on a device or generate an APK. The Kotlin code is in `app/src/main/java/com/pdfcleaner/app/MainActivity.kt`.
 
+## Workspace and settings
+
+The home screen uses a text-only DePDF header, one primary PDF action, and compact batch/settings cards. System appearance is the default for new installs; saved theme choices are retained. Background patterns have been removed and surfaces, controls and dialogs share a quieter visual style.
+
+Settings contains the **DePDF developer** credit and acknowledgments for PyMuPDF, Pyodide and Capacitor. The responsible-use disclaimer asks users to edit only PDFs they own or have permission to modify, explains permanent changes and backups, and describes the developer’s warranty/liability limits subject to applicable law.
+
 ## PDF viewer gestures
 
 Pinch to zoom, drag to pan, or double-tap to toggle zoom. On a computer, use Ctrl/Cmd + wheel or `+`, `-`, and `0`. Zoom animations respect reduced-motion settings.
 
-Press and hold text to select it, then extend the selection with its handles and tap **Copy**. In a single PDF, drag the floating eraser over words to highlight them. Releasing the eraser copies only the touched words, in reading order, to Android's clipboard. This gesture does not erase PDF content. Tapping the eraser still opens cleaning options; dragging it in a batch item only repositions it. Text copying requires an existing selectable text layer; this does not add OCR to scanned images.
+Use the visible left/right page buttons to change pages (or desktop arrow keys). Swiping does not change pages; pinch zoom and panning remain available.
+
+Press and hold text to select it, extend the selection with its handles, then tap **Copy**. Dragging the floating eraser or soap only repositions the options button; tapping it opens cleaning options. It does not select text or change the clipboard. Text copying requires an existing selectable text layer; this does not add OCR to scanned images.
 
 ## Exported PDF history
 
@@ -46,7 +54,7 @@ Other cards explain notes/stamps, clickable links, attached files, document prop
 
 ## Viewer regression checks (no APK)
 
-Run `npm ci` then `npm run test:viewer`. The tests require a local Chromium executable at `/usr/bin/chromium`, or set `CHROMIUM_PATH` to its location. They exercise the bundled PDF engine, zoom, selection, and touch/mouse eraser gestures in a browser, with a simulated Android clipboard bridge. They do not compile Android code or verify the actual device clipboard. The viewer suite also checks clickable analysis details, plain-text rendering of untrusted document properties, preview/cleanup agreement in the bundled engine, and per-file batch options.
+Run `npm ci` then `npm run test:viewer`. The tests require a local Chromium executable at `/usr/bin/chromium`, or set `CHROMIUM_PATH` to its location. They exercise the bundled PDF engine, zoom, selection, and touch/mouse tool repositioning and explicit page navigation in a browser, with a simulated Android clipboard bridge. They do not compile Android code or verify the actual device clipboard. The viewer suite also checks clickable analysis details, plain-text rendering of untrusted document properties, preview/cleanup agreement in the bundled engine, and per-file batch options.
 
 Optional native engine checks: with Python and PyMuPDF installed, run `PYTHONDONTWRITEBYTECODE=1 python tests/analysis-engine.test.py`. These check affected-text previews against real cleaned PDF copies, original-file and searchable OCR-layer preservation, and history removal on normal, encrypted and large PDFs. The browser suite also uses synthetic incremental/encrypted fixtures to verify both Clean and Unlock exports with the bundled engine.
 
