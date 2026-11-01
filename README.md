@@ -30,9 +30,25 @@ Pinch to zoom, drag to pan, or double-tap to toggle zoom. On a computer, use Ctr
 
 Press and hold text to select it, then extend the selection with its handles and tap **Copy**. In a single PDF, drag the floating eraser over words to highlight them. Releasing the eraser copies only the touched words, in reading order, to Android's clipboard. This gesture does not erase PDF content. Tapping the eraser still opens cleaning options; dragging it in a batch item only repositions it. Text copying requires an existing selectable text layer; this does not add OCR to scanned images.
 
+## Exported PDF history
+
+Every **Clean** and **Unlock** export is saved as a fresh, non-incremental PDF. Earlier saved revisions and unreachable deleted objects are discarded. Document properties (including XMP), known private editor records, annotation author/date records, cached page thumbnails, document scripts, and embedded files are stripped. File identifiers are regenerated, and the output is checked for remaining revision references, metadata, embedded files and known editor records before replacing an earlier export. Interrupted or failed saves do not expose a partial output. Old signature validation records cannot remain valid after rewriting and are cleared.
+
+Metadata and embedded-file removal are mandatory, including when older saved settings requested otherwise. This also removes ordinary attached documents and file-attachment icons, because they may contain older copies. Page content, current comment text, form values and searchable OCR text remain unless selected cleanup operations remove them. Encrypted input is first rewritten into a private decrypted temporary file before fresh IDs are generated; the temporary file is deleted after use.
+
+This cleans history stored inside the exported PDF. It does not delete the original, app/file-manager copies, device history, cloud revisions, backups or other files. This is not a universal provenance/anonymity guarantee: arbitrary private application formats and history written as current page content may not be recognizable. Review the cleaned output and remove unwanted original/backup copies separately.
+
+## Understanding analysis results
+
+After **Analyze**, tap any summary card or selected-cleanup chip to open its details. **Text to remove** lists affected original words by page, based on the settings used for that analysis. Analysis previews the same page-cleaning rules in memory without saving changes to your original PDF. A selected area can affect part of a word. Text inside scanned pictures cannot be listed unless the PDF already contains a selectable text layer.
+
+Other cards explain notes/stamps, clickable links, attached files, document properties, hidden text and images in plain language. Each file’s details show whether that category is enabled for removal. Batch results use each PDF’s own options and include its filename. Long entries can be expanded, and longer lists have **Show more**. Re-analyze after changing cleanup settings.
+
 ## Viewer regression checks (no APK)
 
-Run `npm ci` then `npm run test:viewer`. The tests require a local Chromium executable at `/usr/bin/chromium`, or set `CHROMIUM_PATH` to its location. They exercise the bundled PDF engine, zoom, selection, and touch/mouse eraser gestures in a browser, with a simulated Android clipboard bridge. They do not compile Android code or verify the actual device clipboard.
+Run `npm ci` then `npm run test:viewer`. The tests require a local Chromium executable at `/usr/bin/chromium`, or set `CHROMIUM_PATH` to its location. They exercise the bundled PDF engine, zoom, selection, and touch/mouse eraser gestures in a browser, with a simulated Android clipboard bridge. They do not compile Android code or verify the actual device clipboard. The viewer suite also checks clickable analysis details, plain-text rendering of untrusted document properties, preview/cleanup agreement in the bundled engine, and per-file batch options.
+
+Optional native engine checks: with Python and PyMuPDF installed, run `PYTHONDONTWRITEBYTECODE=1 python tests/analysis-engine.test.py`. These check affected-text previews against real cleaned PDF copies, original-file and searchable OCR-layer preservation, and history removal on normal, encrypted and large PDFs. The browser suite also uses synthetic incremental/encrypted fixtures to verify both Clean and Unlock exports with the bundled engine.
 
 ## Hidden / tracker text option
 
@@ -44,7 +60,7 @@ Settings has an **App updates** card with a **Check for updates** button (and an
 
 - This adds the `INTERNET` permission. It is used by one function (`MainActivity.fetchUpdateInfo`): a single HTTPS GET to `api.github.com`. Nothing from your device is sent.
 - The web layer is blocked from the network in `shouldInterceptRequest`.
-- The update checker uses `lupin-hash/depdf`, configured in `app/src/main/res/values/update.xml`.
+- The update checker uses `mken4750-hash/depdf`, configured in `app/src/main/res/values/update.xml`.
 - Every push to `main` starts one build in `.github/workflows/build-apk.yml`. It chooses a version, builds one APK, then creates its matching GitHub tag and release. Tag pushes do not start a second build. Pull requests do not build release APKs.
 - The first release uses `package.json`’s version (`1.0.0` initially). Later pushes bump the latest version tag’s patch number: `1.0.6` → `1.0.7`. The APK’s version name and release version always match; Android’s version code uses the workflow run number.
 - To choose an exact version for the next main push, run `npm version 1.0.6 --no-git-tag-version`, then commit and push the resulting `package.json` and `package-lock.json` changes with your app changes. A package version newer than all existing release tags is used exactly.
