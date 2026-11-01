@@ -3,31 +3,101 @@ name: Build APK
 on:
   push:
     branches: [main]
-    tags: ['v*']        # pushing a tag like v1.1 builds AND publishes a release
-  pull_request:
-  workflow_dispatch:    # adds a "Run workflow" button on the Actions tab
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact version (e.g. 1.0.6); leave blank to bump the latest patch'
+        required: false
+        type: string
+
+# Serialize releases so two main pushes cannot choose the same next version.
+concurrency:
+  group: depdf-release
+  cancel-in-progress: false
 
 permissions:
-  contents: write       # needed to create a release
+  contents: read
 
 jobs:
-  build:
+  version:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      release_state: ${{ steps.release.outputs.result }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Choose app version and release tag
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node .github/scripts/release-version.cjs
+
+      - name: Check for an already completed release
+        id: release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        with:
+          result-encoding: string
+          script: |
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                ...context.repo, tag: process.env.RELEASE_TAG
+              });
+              const asset = `DePDF-${process.env.RELEASE_VERSION}.apk`;
+              if (!data.draft && data.assets.some(a => a.name === asset && a.state === 'uploaded')) {
+                core.notice('This commit already has its versioned APK. Skipping the build.');
+                return 'complete';
+              }
+              return data.draft ? 'draft' : 'published';
+            } catch (error) {
+              if (error.status === 404) return 'missing';
+              throw error;
+            }
+
+  build:
+    needs: version
+    if: needs.version.outputs.release_state != 'complete'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      APP_VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and sync Capacitor
+        run: |
+          npm ci
+          npm run sync:android
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # Optional: sign with your own key so updates install over the old version.
-      # Add the secrets KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD (see GITHUB_GUIDE.md).
+      # Keep the same keystore for all releases so Android can install updates.
       - name: Prepare signing key (if secrets exist)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -37,39 +107,42 @@ jobs:
             echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           fi
 
-      - name: Build APK
+      - name: Build one versioned APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ARGS=""
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            ARGS="-PappVersion=${GITHUB_REF_NAME#v} -PappVersionCode=${GITHUB_RUN_NUMBER}"
-          fi
-          if [ -n "$KEYSTORE_PATH" ]; then
-            ./gradlew assembleRelease $ARGS --console=plain
+          ARGS=("-PappVersion=$APP_VERSION" "-PappVersionCode=$GITHUB_RUN_NUMBER" --console=plain)
+          if [ -n "${KEYSTORE_PATH:-}" ]; then
+            ./gradlew assembleRelease "${ARGS[@]}"
             SRC=app/build/outputs/apk/release/app-release.apk
           else
             echo "No signing key set: building a debug-signed APK."
-            ./gradlew assembleDebug $ARGS --console=plain
+            ./gradlew assembleDebug "${ARGS[@]}"
             SRC=app/build/outputs/apk/debug/app-debug.apk
           fi
           mkdir -p dist
-          cp "$SRC" dist/DePDF.apk
+          cp "$SRC" "dist/DePDF-$APP_VERSION.apk"
 
-      - name: Upload APK
+      - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: PDFCleaner-apk
-          path: dist/DePDF.apk
+          name: DePDF-${{ env.APP_VERSION }}
+          path: dist/DePDF-${{ env.APP_VERSION }}.apk
           if-no-files-found: error
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish the same APK and tag this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_STATE: ${{ needs.version.outputs.release_state }}
         run: |
-          cp dist/DePDF.apk "dist/DePDF-${GITHUB_REF_NAME}.apk"
-          gh release create "$GITHUB_REF_NAME" "dist/DePDF-${GITHUB_REF_NAME}.apk" \
-            --title "DePDF ${GITHUB_REF_NAME}" --generate-notes
+          if [ "$RELEASE_STATE" = missing ]; then
+            gh release create "$RELEASE_TAG" "dist/DePDF-$APP_VERSION.apk" \
+              --target "$GITHUB_SHA" --title "DePDF $APP_VERSION" --generate-notes
+          else
+            gh release upload "$RELEASE_TAG" "dist/DePDF-$APP_VERSION.apk" --clobber
+            if [ "$RELEASE_STATE" = draft ]; then
+              gh release edit "$RELEASE_TAG" --draft=false
+            fi
+          fi

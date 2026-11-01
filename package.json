@@ -1,0 +1,21 @@
+{
+  "name": "depdf",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "sync:android": "cap sync android",
+    "open:android": "cap open android",
+    "test:viewer": "node --test tests/viewer.cjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/core": "8.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0",
+    "playwright-core": "1.64.1"
+  }
+}

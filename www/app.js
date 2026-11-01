@@ -450,7 +450,7 @@
     return out;
   }
 
-  const sel = { words: [], lo: -1, hi: -1, drag: null, lp: null, bbox: null };
+  const sel = { words: [], lo: -1, hi: -1, drag: null, lp: null, bbox: null, picked: null };
   const hLo = makeSelHandle("lo"), hHi = makeSelHandle("hi");
   $("#selhl").append(hLo, hHi);
   function selPick(cx, cy, maxPx) {
@@ -460,24 +460,37 @@
   }
   function selClear() {
     if (sel.lp) clearTimeout(sel.lp.t);
-    sel.lp = null; sel.drag = null; sel.lo = sel.hi = -1; zoomG.selecting = false;
+    sel.lp = null; sel.drag = null; sel.picked = null; sel.lo = sel.hi = -1; zoomG.selecting = false;
     renderSel();
   }
+  let selFrame = 0;
   function renderSel() {
-    const rects = $("#selrects"); rects.textContent = "";
+    if (!selFrame) selFrame = requestAnimationFrame(() => { selFrame = 0; paintSel(); });
+  }
+  function selectedText() {
+    if (!sel.picked) return selText(sel.words, sel.lo, sel.hi);
+    const words = [...sel.picked].sort((a, b) => a - b).map(i => sel.words[i]);
+    return words.length ? selText(words, 0, words.length - 1) : "";
+  }
+  function paintSel() {
+    const rects = $("#selrects");
     const bar = $("#selbar");
-    if (sel.lo < 0) { bar.hidden = true; hLo.hidden = hHi.hidden = true; sel.bbox = null; return; }
-    const frag = document.createDocumentFragment(); let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
-    for (const r of selRects(sel.words, sel.lo, sel.hi)) {
-      const d = document.createElement("div"); d.className = "hl";
+    if (sel.lo < 0) { rects.replaceChildren(); bar.hidden = true; hLo.hidden = hHi.hidden = true; sel.bbox = null; return; }
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0, count = 0;
+    const highlights = sel.picked ? [...sel.picked].sort((a, b) => a - b).map(i => {
+      const w = sel.words[i]; return { x0: w[0], y0: w[1], x1: w[2], y1: w[3] };
+    }) : selRects(sel.words, sel.lo, sel.hi);
+    for (const r of highlights) {
+      let d = rects.children[count++];
+      if (!d) { d = document.createElement("div"); d.className = "hl"; rects.append(d); }
       Object.assign(d.style, { left: r.x0 * 100 + "%", top: r.y0 * 100 + "%", width: (r.x1 - r.x0) * 100 + "%", height: (r.y1 - r.y0) * 100 + "%" });
-      frag.append(d); x0 = Math.min(x0, r.x0); y0 = Math.min(y0, r.y0); x1 = Math.max(x1, r.x1); y1 = Math.max(y1, r.y1);
+      x0 = Math.min(x0, r.x0); y0 = Math.min(y0, r.y0); x1 = Math.max(x1, r.x1); y1 = Math.max(y1, r.y1);
     }
-    rects.append(frag);
+    while (rects.children.length > count) rects.lastElementChild.remove();
     const a = sel.words[sel.lo], b = sel.words[sel.hi];
     hLo.style.left = a[0] * 100 + "%"; hLo.style.top = a[3] * 100 + "%";
     hHi.style.left = b[2] * 100 + "%"; hHi.style.top = b[3] * 100 + "%";
-    hLo.hidden = hHi.hidden = false;
+    hLo.hidden = hHi.hidden = !!sel.picked;
     sel.bbox = [x0, y0, x1, y1];
     selReposition();
   }
@@ -504,14 +517,19 @@
       if (id !== e.pointerId) return;
       const i = selPick(e.clientX, e.clientY - 18, Infinity);      /* the finger sits below the text the handle controls */
       if (i < 0) return;
+      const oldLo = sel.lo, oldHi = sel.hi;
       if (role === "lo") sel.lo = Math.min(i, sel.hi); else sel.hi = Math.max(i, sel.lo);
-      renderSel();
+      if (oldLo !== sel.lo || oldHi !== sel.hi) renderSel();
     });
     const end = () => { id = null; zoomG.selecting = false; };
     h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end);
     return h;
   }
   async function copyText(text) {
+    if (!text) return false;
+    if (NATIVE?.copyText) {
+      try { if (NATIVE.copyText(text)) return true; } catch (e) { /* browser fallback */ }
+    }
     try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall back below */ }
     try {
       const t = document.createElement("textarea"); t.value = text; t.style.cssText = "position:fixed;opacity:0;left:-999px";
@@ -520,11 +538,11 @@
   }
   $("#sel-copy").addEventListener("click", async () => {
     if (sel.lo < 0) return;
-    const ok = await copyText(selText(sel.words, sel.lo, sel.hi));
+    const ok = await copyText(selectedText());
     toast(ok ? "Copied" : "Couldn't copy", !ok); if (ok) selClear();
   });
-  $("#sel-line").addEventListener("click", () => { if (sel.lo >= 0) { [sel.lo, sel.hi] = selLineSpan(sel.words, sel.lo, sel.hi); renderSel(); } });
-  $("#sel-all").addEventListener("click", () => { if (sel.words.length) { sel.lo = 0; sel.hi = sel.words.length - 1; renderSel(); } });
+  $("#sel-line").addEventListener("click", () => { if (sel.lo >= 0) { sel.picked = null; [sel.lo, sel.hi] = selLineSpan(sel.words, sel.lo, sel.hi); renderSel(); } });
+  $("#sel-all").addEventListener("click", () => { if (sel.words.length) { sel.picked = null; sel.lo = 0; sel.hi = sel.words.length - 1; renderSel(); } });
   $("#sel-done").addEventListener("click", selClear);
 
   /* touch: press and hold on text, then drag or use the handles. mouse: just drag. */
@@ -534,7 +552,7 @@
       if (e.button !== 0) return;
       const i = selPick(e.clientX, e.clientY, 40);
       if (i < 0) { selClear(); return; }
-      sel.lo = sel.hi = i; sel.drag = { id: e.pointerId, a: i }; zoomG.selecting = true;
+      sel.picked = null; sel.lo = sel.hi = i; sel.drag = { id: e.pointerId, a: i }; zoomG.selecting = true;
       el.stage.setPointerCapture(e.pointerId); renderSel(); return;
     }
     if (sel.lp) clearTimeout(sel.lp.t);
@@ -542,18 +560,21 @@
     lp.t = setTimeout(() => {
       const i = selPick(lp.x, lp.y, 44);
       if (i < 0) return;
-      lp.fired = true; sel.lo = sel.hi = i; sel.drag = { id: lp.id, a: i }; zoomG.selecting = true;
+      lp.fired = true; sel.picked = null; sel.lo = sel.hi = i; sel.drag = { id: lp.id, a: i }; zoomG.selecting = true;
       try { if (navigator.vibrate) navigator.vibrate(15); } catch (er) { /* not supported */ }
       renderSel();
     }, 420);
     sel.lp = lp;
   }, true);
-  el.stage.addEventListener("pinchstart", () => { if (sel.lp) clearTimeout(sel.lp.t); sel.lp = null; });
+  el.stage.addEventListener("pinchstart", () => { if (sel.lp) clearTimeout(sel.lp.t); sel.lp = null; sel.drag = null; zoomG.selecting = false; });
   el.stage.addEventListener("pointermove", (e) => {
     if (sel.lp && sel.lp.id === e.pointerId && !sel.lp.fired && Math.hypot(e.clientX - sel.lp.x, e.clientY - sel.lp.y) > 10) { clearTimeout(sel.lp.t); sel.lp.moved = true; }
     if (sel.drag && sel.drag.id === e.pointerId) {
       const i = selPick(e.clientX, e.clientY, Infinity);
-      if (i >= 0) { sel.lo = Math.min(sel.drag.a, i); sel.hi = Math.max(sel.drag.a, i); renderSel(); }
+      if (i >= 0) {
+        const lo = Math.min(sel.drag.a, i), hi = Math.max(sel.drag.a, i);
+        if (lo !== sel.lo || hi !== sel.hi) { sel.lo = lo; sel.hi = hi; renderSel(); }
+      }
     }
   });
   const selEnd = (e) => {
@@ -1165,8 +1186,19 @@
     root.style.setProperty("--accent-2", a[3]);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = getComputedStyle(root).getPropertyValue("--bg").trim() || meta.content;
+    syncSystemBars();
     renderAppearance(list);
   }
+  function syncSystemBars() {
+    if (!NATIVE?.syncAppearance) return;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const rgb = bg.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    if (!rgb || rgb.length !== 3) return;
+    const hex = "#" + rgb.map(v => Math.round(v).toString(16).padStart(2, "0")).join("");
+    const luminance = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+    NATIVE.syncAppearance(hex, luminance < 128);
+  }
+  window.__syncSystemBars = syncSystemBars;
   function renderAppearance(list) {
     const tl = $("#theme-list"), al = $("#accent-list");
     tl.textContent = ""; al.textContent = "";
@@ -1227,24 +1259,96 @@
     try { await navigator.clipboard.writeText($("#an-report").textContent); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
 
-  (() => { // draggable eraser bubble
+  // A swept eraser rectangle hits words along the actual drag path, including
+  // fast movements between pointer samples, without selecting intervening lines.
+  function eraserHits(w, a, b, rx, ry) {
+    let enter = 0, leave = 1;
+    for (const [start, delta, min, max] of [
+      [a.x, b.x - a.x, w[0] - rx, w[2] + rx],
+      [a.y, b.y - a.y, w[1] - ry, w[3] + ry],
+    ]) {
+      if (Math.abs(delta) < 1e-9) { if (start < min || start > max) return false; }
+      else {
+        const t0 = (min - start) / delta, t1 = (max - start) / delta;
+        enter = Math.max(enter, Math.min(t0, t1)); leave = Math.min(leave, Math.max(t0, t1));
+        if (enter > leave) return false;
+      }
+    }
+    return true;
+  }
+  (() => { // draggable eraser: tap for options, sweep text to select and copy
     const b = $("#bubble"), host = el.prevCard;
-    let d = null, moved = false;
+    let d = null, moved = false, frame = 0;
+    function flush() {
+      frame = 0;
+      if (!d || !moved) return;
+      b.style.transform = `translate3d(${d.x - d.startX}px, ${d.y - d.startY}px, 0)`;
+      if (!d.copy || d.token !== state.previewToken) return;
+      const r = el.prevImg.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      const points = d.points.splice(0).map(p => ({ x: (p.x + d.w / 2 - r.left) / r.width, y: (p.y + d.h / 2 - r.top) / r.height }));
+      if (!points.length) return;
+      let changed = false;
+      for (let j = 1; j < points.length; j++) {
+        for (let i = 0; i < sel.words.length; i++) {
+          if (!d.picked.has(i) && eraserHits(sel.words[i], points[j - 1], points[j], d.w / (2 * r.width), d.h / (2 * r.height))) {
+            d.picked.add(i); changed = true;
+          }
+        }
+      }
+      d.points.push({ x: d.x + d.host.left, y: d.y + d.host.top });
+      if (changed) {
+        sel.picked = d.picked;
+        const indices = [...d.picked]; sel.lo = Math.min(...indices); sel.hi = Math.max(...indices);
+        renderSel();
+      }
+    }
     b.addEventListener("pointerdown", (e) => {
-      b.setPointerCapture(e.pointerId);
+      if (b.disabled || (e.pointerType === "mouse" && e.button !== 0)) return;
+      e.preventDefault(); b.setPointerCapture(e.pointerId);
       const r = b.getBoundingClientRect();
-      d = { ox: e.clientX - r.left, oy: e.clientY - r.top, x: e.clientX, y: e.clientY }; moved = false;
+      const h = b.classList.contains("in-batch") ? { left: 0, top: 0, width: innerWidth, height: innerHeight } : host.getBoundingClientRect();
+      const x = r.left - h.left, y = r.top - h.top;
+      d = { id: e.pointerId, host: h, w: r.width, h: r.height, ox: e.clientX - r.left, oy: e.clientY - r.top,
+        downX: e.clientX, downY: e.clientY, startX: x, startY: y, x, y, picked: new Set(), points: [{ x: r.left, y: r.top }],
+        copy: !b.classList.contains("in-batch") && state.itemIdx == null && !el.prevImg.hidden && !!sel.words.length,
+        token: state.previewToken };
+      moved = false;
     });
     b.addEventListener("pointermove", (e) => {
-      if (!d) return;
-      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) moved = true;
-      if (!moved) return;
-      const h = b.classList.contains("in-batch") ? { left: 0, top: 0, width: innerWidth, height: innerHeight } : host.getBoundingClientRect();
-      const x = Math.min(h.width - b.offsetWidth - 6, Math.max(6, e.clientX - d.ox - h.left));
-      const y = Math.min(h.height - b.offsetHeight - 6, Math.max(6, e.clientY - d.oy - h.top));
-      Object.assign(b.style, { left: x + "px", top: y + "px", right: "auto", bottom: "auto" });
+      if (!d || d.id !== e.pointerId) return;
+      if (!moved) {
+        if (Math.hypot(e.clientX - d.downX, e.clientY - d.downY) <= 6) return;
+        moved = true;
+        if (d.copy) { selClear(); zoomG.selecting = true; }
+        b.classList.add("sweeping");
+        Object.assign(b.style, { left: d.startX + "px", top: d.startY + "px", right: "auto", bottom: "auto" });
+      }
+      const events = e.getCoalescedEvents?.();
+      for (const p of events?.length ? events : [e]) {
+        d.x = Math.min(d.host.width - d.w - 6, Math.max(6, p.clientX - d.ox - d.host.left));
+        d.y = Math.min(d.host.height - d.h - 6, Math.max(6, p.clientY - d.oy - d.host.top));
+        const point = { x: d.x + d.host.left, y: d.y + d.host.top };
+        if (!d.points.length) d.points.push(point);
+        d.points.push(point);
+      }
+      if (!frame) frame = requestAnimationFrame(flush);
     });
-    b.addEventListener("pointerup", () => { d = null; });
+    async function end(e) {
+      if (!d || d.id !== e.pointerId) return;
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
+      flush();
+      const gesture = d; d = null;
+      b.classList.remove("sweeping"); zoomG.selecting = false;
+      if (moved) Object.assign(b.style, { left: gesture.x + "px", top: gesture.y + "px", transform: "" });
+      if (e.type === "pointerup" && gesture.copy && gesture.token === state.previewToken && gesture.picked.size) {
+        const ok = await copyText(selectedText());
+        toast(ok ? "Selected text copied" : "Couldn't copy. Tap Copy to retry.", !ok);
+      }
+    }
+    b.addEventListener("pointerup", end);
+    b.addEventListener("pointercancel", end);
+    b.addEventListener("lostpointercapture", end);
     b.addEventListener("click", () => {
       if (moved) { moved = false; return; }
       if (b.disabled) return;
@@ -1256,8 +1360,10 @@
       }
       openOptions();
     });
-    b.addEventListener("pointercancel", () => { d = null; });
-    window.addEventListener("resize", () => Object.assign(b.style, { left: "", top: "", right: "", bottom: "" }));
+    window.addEventListener("resize", () => {
+      if (d) end({ pointerId: d.id, type: "pointercancel" });
+      Object.assign(b.style, { left: "", top: "", right: "", bottom: "", transform: "" });
+    });
   })();
 
   /* ------------------------------------------------------------------ *
@@ -1284,17 +1390,41 @@
     const mid = () => { const [a, b] = [...ptrs.values()]; const r = stage.getBoundingClientRect(); return [(a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top]; };
     const local = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
 
-    function apply(s, tx, ty, smooth) {
-      [tx, ty] = zoomClamp(s, tx, ty, dims());
+    let zoomFrame = 0, target = null, animation = null, layout = null;
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    function paintZoom(now) {
+      zoomFrame = 0;
+      if (!target) return;
+      let { s, tx, ty } = target;
+      if (animation) {
+        const t = Math.min(1, (now - animation.start) / 220), k = 1 - Math.pow(1 - t, 3);
+        s = animation.s + (s - animation.s) * k;
+        tx = animation.tx + (tx - animation.tx) * k; ty = animation.ty + (ty - animation.ty) * k;
+        if (t === 1) animation = null;
+      }
       zoomG.s = s; zoomG.tx = tx; zoomG.ty = ty;
-      wrap.style.transition = smooth ? "transform .2s ease-out" : "none";
-      wrap.style.transform = s === 1 && Math.abs(tx) < 0.5 && Math.abs(ty) < 0.5 ? "" : "translate(" + tx + "px, " + ty + "px) scale(" + s + ")";
+      wrap.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${s})`;
       wrap.style.setProperty("--zs", String(s));
       stage.classList.toggle("zoomed", s > 1.02);
-      scheduleHires(); selReposition();
+      selReposition();
+      if (animation) zoomFrame = requestAnimationFrame(paintZoom);
+      else scheduleHires();
     }
-    zoomG.reset = () => { g = null; ptrs.clear(); zoomG.pinch = false; zoomG.panning = false; apply(1, 0, 0, false); hideHires(); };
-    zoomG.refresh = () => { hideHires(); scheduleHires(); };
+    function apply(s, tx, ty, smooth) {
+      [tx, ty] = zoomClamp(s, tx, ty, layout || (layout = dims()));
+      target = { s, tx, ty };
+      animation = smooth && !reducedMotion.matches ? { s: zoomG.s, tx: zoomG.tx, ty: zoomG.ty, start: performance.now() } : null;
+      clearTimeout(hiT);
+      if (!zoomFrame) zoomFrame = requestAnimationFrame(paintZoom);
+    }
+    zoomG.reset = () => {
+      g = null; ptrs.clear(); layout = null; zoomG.pinch = false; zoomG.panning = false;
+      if (zoomFrame) cancelAnimationFrame(zoomFrame);
+      zoomFrame = 0; animation = null; target = { s: 1, tx: 0, ty: 0 };
+      paintZoom(performance.now()); hideHires();
+    };
+    zoomG.refresh = () => { layout = null; hideHires(); apply(zoomG.s, zoomG.tx, zoomG.ty, false); };
+    el.prevImg.addEventListener("load", zoomG.refresh);
 
     /* sharp tile of just the visible part, so text stays crisp when zoomed in */
     function hideHires() { clearTimeout(hiT); hires.hidden = true; hires.removeAttribute("src"); if (hiUrl) { URL.revokeObjectURL(hiUrl); hiUrl = ""; } }
@@ -1331,6 +1461,9 @@
 
     stage.addEventListener("pointerdown", (e) => {
       if (el.prevImg.hidden || e.target.closest(".hf-handle, .rx, .vnav, .sel-handle")) return;
+      layout = dims();
+      if (animation) apply(zoomG.s, zoomG.tx, zoomG.ty, false);
+      stage.setPointerCapture(e.pointerId);
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: performance.now() });
       if (ptrs.size === 2) {
         zoomG.pinch = true; stage.dispatchEvent(new Event("pinchstart"));
@@ -1375,7 +1508,7 @@
       }
       if (g && g.type === "pan" && g.id === e.pointerId) g = null;
       /* double tap: toggle between fit and 2.5x at the tap point */
-      if (wasOnly && e.type === "pointerup" && e.pointerType !== "mouse" && !state.drawing && moved < 10 && performance.now() - p.t < 300) {
+      if (wasOnly && e.type === "pointerup" && e.pointerType !== "mouse" && !state.drawing && !zoomG.selecting && moved < 10 && performance.now() - p.t < 300) {
         const now = performance.now();
         if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
           lastTap = null;
@@ -1393,19 +1526,21 @@
       const [px, py] = local(e);
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const s = Math.min(MAX, Math.max(1, zoomG.s * Math.exp(-e.deltaY * 0.01))), k = s / zoomG.s;
-        apply(s, px - (px - zoomG.tx) * k, py - (py - zoomG.ty) * k, false);
+        const base = target || zoomG;
+        const s = Math.min(MAX, Math.max(1, base.s * Math.exp(-e.deltaY * 0.005))), k = s / base.s;
+        apply(s, px - (px - base.tx) * k, py - (py - base.ty) * k, true);
       } else { e.preventDefault(); apply(zoomG.s, zoomG.s > 1.02 ? zoomG.tx - e.deltaX : zoomG.tx, zoomG.ty - e.deltaY, false); }
     }, { passive: false });
     document.addEventListener("keydown", (e) => {
       if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])") || el.prevImg.hidden) return;
       const c = [stage.clientWidth / 2, stage.clientHeight / 2];
+      if (e.target.closest("input, textarea, select, [contenteditable=true]")) return;
       const zoomTo = (s) => { s = Math.min(MAX, Math.max(1, s)); const k = s / zoomG.s; apply(s, c[0] - (c[0] - zoomG.tx) * k, c[1] - (c[1] - zoomG.ty) * k, true); };
       if (e.key === "+" || e.key === "=") zoomTo(zoomG.s * 1.4);
       else if (e.key === "-") zoomTo(zoomG.s / 1.4);
       else if (e.key === "0") zoomG.reset();
     });
-    window.addEventListener("resize", () => apply(zoomG.s, zoomG.tx, zoomG.ty, false));
+    window.addEventListener("resize", zoomG.refresh);
   })();
 
   (() => { // swipe left / right to change pages
