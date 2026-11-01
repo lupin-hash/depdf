@@ -17,7 +17,7 @@
     watermark: "", imgWm: true, xrefs: "",
     meta: true, annots: false, links: false, extras: true, hidden: false,
     autoUpdate: false,
-    theme: "eraser", accent: 0, lite: LITE_AUTO,
+    theme: "system", accent: 0, lite: LITE_AUTO,
   };
   const STORE_KEY = "pdfcleaner.settings.v1";
 
@@ -277,7 +277,7 @@
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
     el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate; el.lite.checked = !!s.lite; applyLite();
-    look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "eraser";
+    look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "system";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
     applyAppearance();
     syncRange(el.top, el.topRange); syncRange(el.bottom, el.bottomRange);
@@ -295,7 +295,6 @@
     try {
       const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
       if ((saved.v || 1) < 2 && saved.bottom === "2") saved.bottom = "0";
-      if ((saved.v || 1) < 3 && saved.theme === "system") saved.theme = "eraser";
       s = { ...DEFAULTS, ...saved, v: 3 };
     } catch (e) { /* ignore */ }
     applySettings(s);
@@ -411,8 +410,32 @@
     if (!b || b.disabled || b.dataset.src === state.previewSrc) return;
     state.page = 0; setSeg(b.dataset.src); loadPreview();
   });
-  el.pgPrev.addEventListener("click", () => { if (state.page > 0) { state.page--; loadPreview(); } });
-  el.pgNext.addEventListener("click", () => { if (state.page < state.pages - 1) { state.page++; loadPreview(); } });
+  function pageButton(button, direction) {
+    let touch = null, lastTouch = -Infinity;
+    const turn = () => {
+      const next = state.page + direction;
+      if (next >= 0 && next < state.pages) { state.page = next; loadPreview(); }
+    };
+    button.addEventListener("pointerdown", e => {
+      if (e.pointerType === "mouse" || button.disabled) return;
+      touch = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      button.setPointerCapture(e.pointerId);
+    });
+    button.addEventListener("pointerup", e => {
+      if (!touch || touch.id !== e.pointerId) return;
+      const tapped = Math.hypot(e.clientX - touch.x, e.clientY - touch.y) < 10;
+      touch = null; lastTouch = performance.now(); e.preventDefault();
+      if (tapped && !button.disabled) turn();
+    });
+    button.addEventListener("pointercancel", () => { touch = null; });
+    button.addEventListener("click", e => {
+      // Some WebViews omit the click after a touch inside the gesture surface;
+      // others send it. Handle pointerup once and suppress its duplicate click.
+      if (e.detail > 0 && e.pointerType !== "mouse" && performance.now() - lastTouch < 750) return;
+      turn();
+    });
+  }
+  pageButton(el.pgPrev, -1); pageButton(el.pgNext, 1);
 
   /* ------------------------------------------------------------------ *
    * Text selection: our own, so the highlight stays exactly where you  *
@@ -450,7 +473,7 @@
     return out;
   }
 
-  const sel = { words: [], lo: -1, hi: -1, drag: null, lp: null, bbox: null, picked: null };
+  const sel = { words: [], lo: -1, hi: -1, drag: null, lp: null, bbox: null };
   const hLo = makeSelHandle("lo"), hHi = makeSelHandle("hi");
   $("#selhl").append(hLo, hHi);
   function selPick(cx, cy, maxPx) {
@@ -460,26 +483,20 @@
   }
   function selClear() {
     if (sel.lp) clearTimeout(sel.lp.t);
-    sel.lp = null; sel.drag = null; sel.picked = null; sel.lo = sel.hi = -1; zoomG.selecting = false;
+    sel.lp = null; sel.drag = null; sel.lo = sel.hi = -1; zoomG.selecting = false;
     renderSel();
   }
   let selFrame = 0;
   function renderSel() {
     if (!selFrame) selFrame = requestAnimationFrame(() => { selFrame = 0; paintSel(); });
   }
-  function selectedText() {
-    if (!sel.picked) return selText(sel.words, sel.lo, sel.hi);
-    const words = [...sel.picked].sort((a, b) => a - b).map(i => sel.words[i]);
-    return words.length ? selText(words, 0, words.length - 1) : "";
-  }
+  function selectedText() { return selText(sel.words, sel.lo, sel.hi); }
   function paintSel() {
     const rects = $("#selrects");
     const bar = $("#selbar");
     if (sel.lo < 0) { rects.replaceChildren(); bar.hidden = true; hLo.hidden = hHi.hidden = true; sel.bbox = null; return; }
     let x0 = 1, y0 = 1, x1 = 0, y1 = 0, count = 0;
-    const highlights = sel.picked ? [...sel.picked].sort((a, b) => a - b).map(i => {
-      const w = sel.words[i]; return { x0: w[0], y0: w[1], x1: w[2], y1: w[3] };
-    }) : selRects(sel.words, sel.lo, sel.hi);
+    const highlights = selRects(sel.words, sel.lo, sel.hi);
     for (const r of highlights) {
       let d = rects.children[count++];
       if (!d) { d = document.createElement("div"); d.className = "hl"; rects.append(d); }
@@ -490,7 +507,7 @@
     const a = sel.words[sel.lo], b = sel.words[sel.hi];
     hLo.style.left = a[0] * 100 + "%"; hLo.style.top = a[3] * 100 + "%";
     hHi.style.left = b[2] * 100 + "%"; hHi.style.top = b[3] * 100 + "%";
-    hLo.hidden = hHi.hidden = !!sel.picked;
+    hLo.hidden = hHi.hidden = false;
     sel.bbox = [x0, y0, x1, y1];
     selReposition();
   }
@@ -541,8 +558,8 @@
     const ok = await copyText(selectedText());
     toast(ok ? "Copied" : "Couldn't copy", !ok); if (ok) selClear();
   });
-  $("#sel-line").addEventListener("click", () => { if (sel.lo >= 0) { sel.picked = null; [sel.lo, sel.hi] = selLineSpan(sel.words, sel.lo, sel.hi); renderSel(); } });
-  $("#sel-all").addEventListener("click", () => { if (sel.words.length) { sel.picked = null; sel.lo = 0; sel.hi = sel.words.length - 1; renderSel(); } });
+  $("#sel-line").addEventListener("click", () => { if (sel.lo >= 0) { [sel.lo, sel.hi] = selLineSpan(sel.words, sel.lo, sel.hi); renderSel(); } });
+  $("#sel-all").addEventListener("click", () => { if (sel.words.length) { sel.lo = 0; sel.hi = sel.words.length - 1; renderSel(); } });
   $("#sel-done").addEventListener("click", selClear);
 
   /* touch: press and hold on text, then drag or use the handles. mouse: just drag. */
@@ -552,7 +569,7 @@
       if (e.button !== 0) return;
       const i = selPick(e.clientX, e.clientY, 40);
       if (i < 0) { selClear(); return; }
-      sel.picked = null; sel.lo = sel.hi = i; sel.drag = { id: e.pointerId, a: i }; zoomG.selecting = true;
+      sel.lo = sel.hi = i; sel.drag = { id: e.pointerId, a: i }; zoomG.selecting = true;
       el.stage.setPointerCapture(e.pointerId); renderSel(); return;
     }
     if (sel.lp) clearTimeout(sel.lp.t);
@@ -560,7 +577,7 @@
     lp.t = setTimeout(() => {
       const i = selPick(lp.x, lp.y, 44);
       if (i < 0) return;
-      lp.fired = true; sel.picked = null; sel.lo = sel.hi = i; sel.drag = { id: lp.id, a: i }; zoomG.selecting = true;
+      lp.fired = true; sel.lo = sel.hi = i; sel.drag = { id: lp.id, a: i }; zoomG.selecting = true;
       try { if (navigator.vibrate) navigator.vibrate(15); } catch (er) { /* not supported */ }
       renderSel();
     }, 420);
@@ -1135,8 +1152,8 @@
   });
   function syncUploadItem() {
     const f = state.file;
-    $("#m-upload-title").textContent = f ? f.name : "Upload a PDF";
-    $("#m-upload-sub").textContent = f ? [fmtSize(f.size), state.pages ? state.pages + " pages" : "", state.locked ? "unlocked" : ""].filter(Boolean).join(" · ") : "Clean or unlock one file";
+    $("#m-upload-title").textContent = f ? f.name : "Open a PDF";
+    $("#m-upload-sub").textContent = f ? [fmtSize(f.size), state.pages ? state.pages + " pages" : "", state.locked ? "unlocked" : ""].filter(Boolean).join(" · ") : "Review, clean up or unlock";
     $("#m-upload .mi use").setAttribute("href", f ? "#i-file" : "#i-upload");
     $("#m-upload-actions").hidden = !f;
   }
@@ -1166,14 +1183,14 @@
   ];
   /* [name, accent (text/outline), gradient start, gradient end] */
   const ACCENTS = {
-    light: [["Indigo", "#4f46e5", "#4f46e5", "#7c3aed"], ["Teal", "#0f766e", "#0f766e", "#0891b2"], ["Rose", "#be123c", "#be123c", "#e11d48"], ["Orange", "#c2410c", "#c2410c", "#ea580c"], ["Blue", "#1d4ed8", "#1d4ed8", "#0ea5e9"]],
-    dark: [["Violet", "#a5a1ff", "#5b4ee6", "#7c3aed"], ["Mint", "#34d399", "#047857", "#059669"], ["Sky", "#38bdf8", "#0369a1", "#0284c7"], ["Pink", "#f472b6", "#be185d", "#db2777"], ["Amber", "#fbbf24", "#b45309", "#d97706"]],
+    light: [["Forest", "#27665a", "#245b51", "#317969"], ["Teal", "#0f766e", "#0f766e", "#0891b2"], ["Rose", "#be123c", "#be123c", "#e11d48"], ["Orange", "#c2410c", "#c2410c", "#ea580c"], ["Blue", "#1d4ed8", "#1d4ed8", "#0ea5e9"]],
+    dark: [["Sage", "#96d4b9", "#245b51", "#317969"], ["Mint", "#34d399", "#047857", "#059669"], ["Sky", "#38bdf8", "#0369a1", "#0284c7"], ["Pink", "#f472b6", "#be185d", "#db2777"], ["Amber", "#fbbf24", "#b45309", "#d97706"]],
     midnight: [["Cyan", "#22d3ee", "#0e7490", "#0891b2"], ["Lime", "#a3e635", "#4d7c0f", "#65a30d"], ["Magenta", "#e879f9", "#a21caf", "#c026d3"], ["Coral", "#fb7185", "#be123c", "#e11d48"], ["Gold", "#facc15", "#a16207", "#ca8a04"]],
     eraser: [["Rubber pink", "#c2185b", "#c2185b", "#e0457b"], ["Sleeve blue", "#1d4ed8", "#1d4ed8", "#3b82f6"], ["Graphite", "#374151", "#374151", "#6b7280"], ["Pencil yellow", "#b45309", "#b45309", "#e39a1d"], ["Brick red", "#b91c1c", "#b91c1c", "#ef4444"]],
     soap: [["Aqua", "#0e8f9b", "#0e8f9b", "#2bb3c0"], ["Lavender", "#6d4fd0", "#6d4fd0", "#8b6df0"], ["Mint", "#0b8a63", "#0b8a63", "#22b985"], ["Rose petal", "#c93a6e", "#c93a6e", "#e8609a"], ["Citrus", "#c2680a", "#c2680a", "#e39a1d"]],
     sepia: [["Terracotta", "#b45309", "#b45309", "#d97706"], ["Olive", "#4d7c0f", "#4d7c0f", "#65a30d"], ["Teal", "#0f766e", "#0f766e", "#0d9488"], ["Plum", "#86198f", "#86198f", "#a21caf"], ["Navy", "#1e40af", "#1e40af", "#2563eb"]],
   };
-  const look = { theme: "eraser", accent: 0 };
+  const look = { theme: "system", accent: 0 };
   const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
   const effectiveTheme = () => (look.theme === "system" ? (darkMQ.matches ? "dark" : "light") : look.theme);
   function applyAppearance() {
@@ -1251,7 +1268,7 @@
 
 
   /* ------------------------------------------------------------------ *
-   * Viewer: options sheet, analysis box, bubble, swipe                 *
+   * Viewer: options sheet, analysis box and movable tool                 *
    * ------------------------------------------------------------------ */
   $("#an-chips-slot").appendChild(el.chips);
   $("#viewer-back").addEventListener("click", () => { if (state.itemIdx != null) leaveItem(); else go("home"); });
@@ -1260,92 +1277,39 @@
     try { await navigator.clipboard.writeText($("#an-report").textContent); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
 
-  // A swept eraser rectangle hits words along the actual drag path, including
-  // fast movements between pointer samples, without selecting intervening lines.
-  function eraserHits(w, a, b, rx, ry) {
-    let enter = 0, leave = 1;
-    for (const [start, delta, min, max] of [
-      [a.x, b.x - a.x, w[0] - rx, w[2] + rx],
-      [a.y, b.y - a.y, w[1] - ry, w[3] + ry],
-    ]) {
-      if (Math.abs(delta) < 1e-9) { if (start < min || start > max) return false; }
-      else {
-        const t0 = (min - start) / delta, t1 = (max - start) / delta;
-        enter = Math.max(enter, Math.min(t0, t1)); leave = Math.min(leave, Math.max(t0, t1));
-        if (enter > leave) return false;
-      }
-    }
-    return true;
-  }
-  (() => { // draggable eraser: tap for options, sweep text to select and copy
+  (() => { // Move the options tool without selecting or copying page text.
     const b = $("#bubble"), host = el.prevCard;
-    let d = null, moved = false, frame = 0;
-    function flush() {
+    let drag = null, moved = false, frame = 0;
+    function paint() {
       frame = 0;
-      if (!d || !moved) return;
-      b.style.transform = `translate3d(${d.x - d.startX}px, ${d.y - d.startY}px, 0)`;
-      if (!d.copy || d.token !== state.previewToken) return;
-      const r = el.prevImg.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      const points = d.points.splice(0).map(p => ({ x: (p.x + d.w / 2 - r.left) / r.width, y: (p.y + d.h / 2 - r.top) / r.height }));
-      if (!points.length) return;
-      let changed = false;
-      for (let j = 1; j < points.length; j++) {
-        for (let i = 0; i < sel.words.length; i++) {
-          if (!d.picked.has(i) && eraserHits(sel.words[i], points[j - 1], points[j], d.w / (2 * r.width), d.h / (2 * r.height))) {
-            d.picked.add(i); changed = true;
-          }
-        }
-      }
-      d.points.push({ x: d.x + d.host.left, y: d.y + d.host.top });
-      if (changed) {
-        sel.picked = d.picked;
-        const indices = [...d.picked]; sel.lo = Math.min(...indices); sel.hi = Math.max(...indices);
-        renderSel();
-      }
+      if (drag && moved) b.style.transform = `translate3d(${drag.x - drag.startX}px, ${drag.y - drag.startY}px, 0)`;
     }
-    b.addEventListener("pointerdown", (e) => {
+    b.addEventListener("pointerdown", e => {
       if (b.disabled || (e.pointerType === "mouse" && e.button !== 0)) return;
       e.preventDefault(); b.setPointerCapture(e.pointerId);
       const r = b.getBoundingClientRect();
       const h = b.classList.contains("in-batch") ? { left: 0, top: 0, width: innerWidth, height: innerHeight } : host.getBoundingClientRect();
       const x = r.left - h.left, y = r.top - h.top;
-      d = { id: e.pointerId, host: h, w: r.width, h: r.height, ox: e.clientX - r.left, oy: e.clientY - r.top,
-        downX: e.clientX, downY: e.clientY, startX: x, startY: y, x, y, picked: new Set(), points: [{ x: r.left, y: r.top }],
-        copy: !b.classList.contains("in-batch") && state.itemIdx == null && !el.prevImg.hidden && !!sel.words.length,
-        token: state.previewToken };
+      drag = { id: e.pointerId, host: h, w: r.width, h: r.height, ox: e.clientX - r.left, oy: e.clientY - r.top,
+        downX: e.clientX, downY: e.clientY, startX: x, startY: y, x, y };
       moved = false;
     });
-    b.addEventListener("pointermove", (e) => {
-      if (!d || d.id !== e.pointerId) return;
+    b.addEventListener("pointermove", e => {
+      if (!drag || drag.id !== e.pointerId) return;
       if (!moved) {
-        if (Math.hypot(e.clientX - d.downX, e.clientY - d.downY) <= 6) return;
-        moved = true;
-        if (d.copy) { selClear(); zoomG.selecting = true; }
-        b.classList.add("sweeping");
-        Object.assign(b.style, { left: d.startX + "px", top: d.startY + "px", right: "auto", bottom: "auto" });
+        if (Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) <= 6) return;
+        moved = true; b.classList.add("dragging");
+        Object.assign(b.style, { left: drag.startX + "px", top: drag.startY + "px", right: "auto", bottom: "auto" });
       }
-      const events = e.getCoalescedEvents?.();
-      for (const p of events?.length ? events : [e]) {
-        d.x = Math.min(d.host.width - d.w - 6, Math.max(6, p.clientX - d.ox - d.host.left));
-        d.y = Math.min(d.host.height - d.h - 6, Math.max(6, p.clientY - d.oy - d.host.top));
-        const point = { x: d.x + d.host.left, y: d.y + d.host.top };
-        if (!d.points.length) d.points.push(point);
-        d.points.push(point);
-      }
-      if (!frame) frame = requestAnimationFrame(flush);
+      drag.x = Math.min(drag.host.width - drag.w - 6, Math.max(6, e.clientX - drag.ox - drag.host.left));
+      drag.y = Math.min(drag.host.height - drag.h - 6, Math.max(6, e.clientY - drag.oy - drag.host.top));
+      if (!frame) frame = requestAnimationFrame(paint);
     });
-    async function end(e) {
-      if (!d || d.id !== e.pointerId) return;
-      if (frame) { cancelAnimationFrame(frame); frame = 0; }
-      flush();
-      const gesture = d; d = null;
-      b.classList.remove("sweeping"); zoomG.selecting = false;
-      if (moved) Object.assign(b.style, { left: gesture.x + "px", top: gesture.y + "px", transform: "" });
-      if (e.type === "pointerup" && gesture.copy && gesture.token === state.previewToken && gesture.picked.size) {
-        const ok = await copyText(selectedText());
-        toast(ok ? "Selected text copied" : "Couldn't copy. Tap Copy to retry.", !ok);
-      }
+    function end(e) {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (frame) cancelAnimationFrame(frame);
+      paint(); const finished = drag; drag = null; b.classList.remove("dragging");
+      if (moved) Object.assign(b.style, { left: finished.x + "px", top: finished.y + "px", transform: "" });
     }
     b.addEventListener("pointerup", end);
     b.addEventListener("pointercancel", end);
@@ -1362,7 +1326,7 @@
       openOptions();
     });
     window.addEventListener("resize", () => {
-      if (d) end({ pointerId: d.id, type: "pointercancel" });
+      if (drag) end({ pointerId: drag.id, type: "pointercancel" });
       Object.assign(b.style, { left: "", top: "", right: "", bottom: "", transform: "" });
     });
   })();
@@ -1544,29 +1508,12 @@
     window.addEventListener("resize", zoomG.refresh);
   })();
 
-  (() => { // swipe left / right to change pages
-    const box = $("#pagebox");
-    let s0 = null, dx = 0;
-    el.stage.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || zoomG.s > 1.02 || zoomG.selecting || state.drawing || el.prevImg.hidden || e.target.closest(".vnav, .hf-handle, .sel-handle")) return;
-      s0 = { x: e.clientX }; dx = 0; box.style.transition = "none";
-    });
-    el.stage.addEventListener("pointermove", (e) => { if (!s0) return; if (zoomG.panning || zoomG.selecting) { s0 = null; dx = 0; box.style.transition = ""; box.style.transform = ""; return; } dx = e.clientX - s0.x; box.style.transform = "translateX(" + dx * 0.6 + "px)"; });
-    const end = () => {
-      if (!s0) return;
-      s0 = null; box.style.transition = ""; box.style.transform = "";
-      if (dx < -70 && state.page < state.pages - 1) { state.page++; loadPreview(); }
-      else if (dx > 70 && state.page > 0) { state.page--; loadPreview(); }
-      dx = 0;
-    };
-    el.stage.addEventListener("pointerup", end);
-    el.stage.addEventListener("pointercancel", end);
-    el.stage.addEventListener("pinchstart", () => { s0 = null; dx = 0; box.style.transition = ""; box.style.transform = ""; });
-    document.addEventListener("keydown", (e) => {
-      if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])")) return;
-      if (e.key === "ArrowRight") el.pgNext.click(); else if (e.key === "ArrowLeft") el.pgPrev.click();
-    });
-  })();
+  // Page changes are explicit: visible arrow buttons or desktop arrow keys.
+  document.addEventListener("keydown", e => {
+    if (!document.body.classList.contains("viewer-open") || $(".modal:not([hidden])") || e.target.closest("input, textarea, select, [contenteditable=true]") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); el.pgNext.click(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); el.pgPrev.click(); }
+  });
 
 
   /* Eraser menu: five options, each opens its own window */

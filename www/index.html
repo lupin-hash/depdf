@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DePDF</title>
-<meta name="description" content="Clean and unlock PDFs privately on your device before data extraction.">
+<meta name="description" content="Clean, review and unlock your PDFs privately on your device.">
 <meta name="theme-color" content="#fbeee9">
-<script>try{var s=JSON.parse(localStorage.getItem("pdfcleaner.settings.v1")||"{}"),t=s.theme;if(!t||((s.v||1)<3&&t==="system"))t="eraser";if(s.lite===true||(s.lite===undefined&&((navigator.deviceMemory||8)<=2||(navigator.hardwareConcurrency||8)<=4)))document.documentElement.classList.add("lite");if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var s=JSON.parse(localStorage.getItem("pdfcleaner.settings.v1")||"{}"),t=s.theme;if(!t)t="system";if(s.lite===true||(s.lite===undefined&&((navigator.deviceMemory||8)<=2||(navigator.hardwareConcurrency||8)<=4)))document.documentElement.classList.add("lite");if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
 <meta name="color-scheme" content="light dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -62,10 +62,9 @@
 
 <div class="app" id="app" hidden>
   <header class="top">
-    <img class="logo" src="icons/icon-192.png" alt="" width="44" height="44">
     <div class="titles">
       <h1>DePDF</h1>
-      <p>for data extraction</p>
+      <p>YOUR PDF WORKSPACE</p>
     </div>
     <span class="pill" id="pill" title="All processing happens on this device"><svg class="ic"><use href="#i-shield"/></svg><span id="pill-text">On&#8209;device</span></span>
   </header>
@@ -81,18 +80,24 @@
     <svg class="ic go"><use href="#i-chevron"/></svg>
   </button>
 
-  <section id="view-home" class="home">
+  <section id="view-home" class="home" aria-labelledby="home-title">
+    <div class="home-intro">
+      <p class="eyebrow">A LITTLE LESS CLUTTER</p>
+      <h2 id="home-title">Your PDFs.<br><span>A clean slate.</span></h2>
+      <p>Clean up the details. Keep what matters.<br>All on your device.</p>
+    </div>
     <nav class="menu" aria-label="Main menu">
       <div class="menu-item" id="m-upload-item">
-        <button class="menu-btn" id="m-upload" type="button"><span class="mi"><svg class="ic"><use href="#i-upload"/></svg></span><span class="mt"><b id="m-upload-title">Upload a PDF</b><small id="m-upload-sub">Clean or unlock one file</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+        <button class="menu-btn" id="m-upload" type="button"><span class="mi"><svg class="ic"><use href="#i-upload"/></svg></span><span class="mt"><b id="m-upload-title">Open a PDF</b><small id="m-upload-sub">Review, clean up or unlock</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
         <div class="menu-actions" id="m-upload-actions" hidden>
           <button type="button" id="m-replace"><svg class="ic"><use href="#i-reset"/></svg><span>Replace PDF</span></button>
           <button type="button" id="m-delete" class="danger"><svg class="ic"><use href="#i-trash"/></svg><span>Delete</span></button>
         </div>
       </div>
-      <button class="menu-btn" id="m-batch" type="button"><span class="mi"><svg class="ic"><use href="#i-layers"/></svg></span><span class="mt"><b>Batch Upload</b><small id="m-batch-sub">Clean many files at once</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
-      <button class="menu-btn" id="m-settings" type="button"><span class="mi"><svg class="ic"><use href="#i-sliders"/></svg></span><span class="mt"><b>Settings</b><small>Theme, updates, disclaimer</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="menu-btn" id="m-batch" type="button"><span class="mi"><svg class="ic"><use href="#i-layers"/></svg></span><span class="mt"><b>Work in batches</b><small id="m-batch-sub">One workflow. Multiple PDFs.</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="menu-btn" id="m-settings" type="button"><span class="mi"><svg class="ic"><use href="#i-sliders"/></svg></span><span class="mt"><b>Make it yours</b><small>Appearance, updates &amp; about</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
     </nav>
+    <div class="home-note"><svg class="ic"><use href="#i-shield"/></svg><p><strong>Your files stay yours.</strong><span>PDF processing happens on this device.</span></p></div>
   </section>
 
   <section id="view-upload" hidden>
@@ -102,7 +107,7 @@
       <section class="card" id="card-preview" aria-label="PDF viewer" hidden>
         <div class="vtop">
           <button class="icon-btn" id="viewer-back" type="button" aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
-          <div class="vt"><b id="vt-name">PDF</b><small id="pg-label">Page 1</small></div>
+          <div class="vt"><b id="vt-name">PDF</b><small id="pg-label" aria-live="polite">Page 1</small></div>
           <div class="seg" id="seg-src" role="tablist" aria-label="Preview source">
             <button type="button" role="tab" data-src="orig" aria-selected="true">Original</button>
             <button type="button" role="tab" data-src="clean" aria-selected="false" disabled>Cleaned</button>
@@ -120,13 +125,13 @@
             </div>
           </div></div>
           <div class="stage-msg" id="stage-msg"></div>
-          <button class="vnav prev" id="pg-prev" type="button" aria-label="Previous page" disabled><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
-          <button class="vnav next" id="pg-next" type="button" aria-label="Next page" disabled><svg class="ic" style="transform:rotate(-90deg)"><use href="#i-chevron"/></svg></button>
+          <button class="vnav prev" id="pg-prev" type="button" title="Previous page" aria-label="Previous page" disabled><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button>
+          <button class="vnav next" id="pg-next" type="button" title="Next page" aria-label="Next page" disabled><svg class="ic" style="transform:rotate(-90deg)"><use href="#i-chevron"/></svg></button>
         </div>
         <div class="sel-bar" id="selbar" hidden role="toolbar" aria-label="Text selection">
           <button id="sel-copy" type="button">Copy</button><button id="sel-line" type="button">Line</button><button id="sel-all" type="button">All</button><button id="sel-done" type="button">Done</button>
         </div>
-        <button class="bubble" id="bubble" type="button" aria-label="Tap for cleaning options; drag across text to select and copy" title="Tap for options. Drag across text to select and copy on release."><svg class="ic"><use href="#i-eraser"/></svg><svg class="art art-eraser" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="eb-clip"><rect x="6" y="14" width="60" height="28" rx="7"/></clipPath></defs><g transform="rotate(-22 36 28)"><rect x="6" y="17" width="60" height="28" rx="7" fill="#000" opacity=".15"/><g clip-path="url(#eb-clip)"><rect x="6" y="14" width="60" height="28" fill="#f06a98"/><rect x="6" y="34" width="60" height="8" fill="#d8467c"/><rect x="38" y="14" width="30" height="28" fill="#2f5fd0"/><rect x="38" y="14" width="30" height="8" fill="#4b7be8"/><rect x="36" y="14" width="3" height="28" fill="#fff"/><rect x="50" y="14" width="2" height="28" fill="#fff" opacity=".7"/></g><rect x="6" y="14" width="60" height="28" rx="7" fill="none" stroke="#2b2b33" stroke-opacity=".35" stroke-width="1.5"/><path d="M12 20h18" stroke="#fff" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/></g><circle cx="12" cy="50" r="2" fill="#e0457b"/><circle cx="20" cy="53" r="1.5" fill="#6b7280"/><circle cx="5" cy="46" r="1.5" fill="#6b7280"/></svg><img class="art art-sponge" src="icons/tool-soap.png" alt="" aria-hidden="true" draggable="false"></button>
+        <button class="bubble" id="bubble" type="button" aria-label="Cleaning options; drag to reposition" title="Tap for cleaning options. Drag to move this button."><svg class="ic"><use href="#i-eraser"/></svg><svg class="art art-eraser" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="eb-clip"><rect x="6" y="14" width="60" height="28" rx="7"/></clipPath></defs><g transform="rotate(-22 36 28)"><rect x="6" y="17" width="60" height="28" rx="7" fill="#000" opacity=".15"/><g clip-path="url(#eb-clip)"><rect x="6" y="14" width="60" height="28" fill="#f06a98"/><rect x="6" y="34" width="60" height="8" fill="#d8467c"/><rect x="38" y="14" width="30" height="28" fill="#2f5fd0"/><rect x="38" y="14" width="30" height="8" fill="#4b7be8"/><rect x="36" y="14" width="3" height="28" fill="#fff"/><rect x="50" y="14" width="2" height="28" fill="#fff" opacity=".7"/></g><rect x="6" y="14" width="60" height="28" rx="7" fill="none" stroke="#2b2b33" stroke-opacity=".35" stroke-width="1.5"/><path d="M12 20h18" stroke="#fff" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/></g><circle cx="12" cy="50" r="2" fill="#e0457b"/><circle cx="20" cy="53" r="1.5" fill="#6b7280"/><circle cx="5" cy="46" r="1.5" fill="#6b7280"/></svg><img class="art art-sponge" src="icons/tool-soap.png" alt="" aria-hidden="true" draggable="false"></button>
       </section>
     </div>
 
@@ -157,8 +162,9 @@
 
   <section id="view-settings" hidden>
     <div class="settings">
+      <div class="settings-intro"><p class="eyebrow">YOUR WORKSPACE, YOUR WAY</p><p>A comfortable look. Clear controls.<br>Everything in its place.</p></div>
       <section class="card" aria-labelledby="h-theme">
-        <div class="card-head"><h2 id="h-theme">Theme</h2></div>
+        <div class="card-head"><h2 id="h-theme">Appearance</h2><span class="section-tag">PERSONALIZE</span></div>
         <div class="theme-list" id="theme-list" role="radiogroup" aria-label="Theme"></div>
         <h3 class="sub-h">Accent color</h3>
         <div class="accent-list" id="accent-list" role="radiogroup" aria-label="Accent color"></div>
@@ -182,7 +188,22 @@
 
       <button class="row-btn" id="uc-clear" type="button"><svg class="ic"><use href="#i-trash"/></svg><span id="uc-label">Forget unlocked PDFs</span></button>
 
-      <button class="row-btn" id="open-disclaimer" type="button"><svg class="ic"><use href="#i-alert"/></svg><span>Disclaimer</span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <section class="card responsible-card" aria-labelledby="h-responsible">
+        <div class="card-head"><h2 id="h-responsible">Responsible use</h2></div>
+        <p class="hint">Only edit documents you own or have permission to change. Review your exported copy before using or sharing it.</p>
+      <button class="row-btn" id="open-disclaimer" type="button"><svg class="ic"><use href="#i-alert"/></svg><span>Read the disclaimer</span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      </section>
+      <section class="card credits-card" id="credits" aria-labelledby="h-credits">
+        <div class="card-head"><h2 id="h-credits">Credits</h2><span class="section-tag">DEPDF</span></div>
+        <p class="developer-credit">Created by <strong>DePDF developer</strong></p>
+        <p class="hint">With thanks to the projects that make on-device PDF tools possible.</p>
+        <dl class="credit-list">
+          <div><dt><a href="https://pymupdf.readthedocs.io/" target="_blank" rel="noopener noreferrer">PyMuPDF</a></dt><dd>PDF processing</dd></div>
+          <div><dt><a href="https://pyodide.org/" target="_blank" rel="noopener noreferrer">Pyodide</a></dt><dd>On-device Python runtime</dd></div>
+          <div><dt><a href="https://capacitorjs.com/" target="_blank" rel="noopener noreferrer">Capacitor</a></dt><dd>Android app foundation</dd></div>
+        </dl>
+        <p class="credits-footnote">Project names belong to their respective owners. Each project is provided under its own license.</p>
+      </section>
 
       <div class="reset-row"><button class="btn ghost sm" id="reset-btn" type="button"><svg class="ic"><use href="#i-reset"/></svg><span>Reset settings</span></button></div>
     </div>
@@ -398,10 +419,18 @@
 
 <div class="modal" id="modal-disclaimer" role="dialog" aria-modal="true" aria-labelledby="md-title" hidden>
   <div class="modal-card">
-    <h2 id="md-title">Disclaimer</h2>
-    <p>Use this app responsibly. Only clean PDFs you own or may change. Hidden text and watermarks can exist for legal or security reasons, and detection isn't perfect, so always check the result.</p>
-    <p>The app is provided &ldquo;as is&rdquo;. The developer is not responsible or liable for how you use it, for lost data or damaged documents, or for any consequences of removing content.</p>
-    <button class="btn primary" type="button" data-close>OK</button>
+    <p class="eyebrow">BEFORE YOU EDIT</p>
+    <h2 id="md-title">Your documents.<br>Your responsibility.</h2>
+    <div class="disclaimer-copy">
+      <h3>Permission comes first</h3>
+      <p>Only edit PDFs you own or have explicit permission to modify. Do not remove another person’s ownership notices, signatures, watermarks or protected content without authorization. You are responsible for following applicable laws and respecting other people’s rights.</p>
+      <h3>Check your exported copy</h3>
+      <p>Cleanup can permanently remove text, images, metadata and attachments from the exported PDF, and editing can invalidate digital signatures. Detection is not perfect. Keep a backup and review the result before relying on or sharing it.</p>
+      <h3>Provided as is</h3>
+      <p>DePDF is provided “as is” and “as available,” without warranties to the extent permitted by applicable law. To that extent, the developer is not liable for misuse, unauthorized edits, lost data, damaged documents, or losses arising from use of the app. You remain responsible for your actions and how you use the output.</p>
+      <p>Nothing in this disclaimer excludes rights or liabilities that cannot lawfully be excluded.</p>
+    </div>
+    <button class="btn primary" type="button" data-close>I understand</button>
   </div>
 </div>
 
