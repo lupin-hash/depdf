@@ -1,17 +1,19 @@
 package com.pdfcleaner.app
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
-import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
@@ -20,20 +22,17 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
+import com.getcapacitor.BridgeActivity
+import com.getcapacitor.BridgeWebViewClient
+import com.getcapacitor.BridgeWebChromeClient
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
-import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -45,15 +44,15 @@ import java.net.URL
 import org.json.JSONObject
 
 /**
- * Hosts the DePDF web app (assets/www) in a WebView.
+ * Hosts the DePDF web app through Capacitor 8.
  *
- * Everything is served from the APK through WebViewAssetLoader on a virtual https origin, so the app
+ * Everything is served from the APK through Capacitor on a virtual https origin, so the app
  * works fully offline and the PDF engine (PyMuPDF compiled to WebAssembly) runs on the device.
  * The only network use is the update check (api.github.com); the web layer itself is blocked from the network.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : BridgeActivity() {
 
-    private lateinit var root: FrameLayout
+    private lateinit var root: android.view.View
     private lateinit var web: WebView
 
     private var chooserCallback: ValueCallback<Array<Uri>>? = null
@@ -63,13 +62,23 @@ class MainActivity : AppCompatActivity() {
     /** File name of a PDF sent to the app ("Open with" / Share), until the web page picks it up. */
     @Volatile private var incomingName: String = ""
 
-    private val chooserLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            chooserCallback?.onReceiveValue(
-                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-            )
-            chooserCallback = null
+    // OpenMultipleDocuments collects every URI from ClipData; WebChromeClient's
+    // parseResult helper only handles a single result URI on Android.
+    private val multipleChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            finishFileChooser(uris.takeIf { it.isNotEmpty() }?.toTypedArray())
         }
+
+    private val singleChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            finishFileChooser(uri?.let { arrayOf(it) })
+        }
+
+    private fun finishFileChooser(uris: Array<Uri>?) {
+        val callback = chooserCallback
+        chooserCallback = null
+        callback?.onReceiveValue(uris)
+    }
 
     private val folderLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -132,38 +141,18 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, backCallback)
         treeUri = getPreferences(MODE_PRIVATE).getString("tree", null)?.let { Uri.parse(it) }
 
-        // Edge-to-edge; the root view applies the system-bar / keyboard insets as padding.
+        // Capacitor owns the WebView and applies system-bar/cutout/IME insets.
+        // SystemBars injects safe-area CSS values; do not pad the root again.
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        root = FrameLayout(this).apply {
-            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.page_bg))
-        }
-        web = WebView(this)
-        root.addView(
-            web,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
-        setContentView(root)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or
-                    WindowInsetsCompat.Type.displayCutout() or
-                    WindowInsetsCompat.Type.ime()
-            )
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            WindowInsetsCompat.CONSUMED
-        }
+        web = bridge.webView
+        root = window.decorView
+        root.setBackgroundColor(ContextCompat.getColor(this, R.color.page_bg))
         applySystemBars()
 
         // Debuggable builds can be inspected from chrome://inspect.
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
-
-        val loader = WebViewAssetLoader.Builder()
-            .setDomain(HOST)
-            .addPathHandler("/_incoming/", IncomingHandler(this))
-            .addPathHandler("/", WwwHandler(this))
-            .build()
 
         web.settings.apply {
             javaScriptEnabled = true
@@ -178,7 +167,7 @@ class MainActivity : AppCompatActivity() {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(web.settings, false) // the app has its own dark theme
         }
 
-        web.webViewClient = object : WebViewClient() {
+        bridge.setWebViewClient(object : BridgeWebViewClient(bridge) {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 // The page may only load its own bundled files. Anything else is blocked, so the part of
                 // the app that handles your PDFs can never reach the internet.
@@ -188,7 +177,11 @@ class MainActivity : AppCompatActivity() {
                         emptyMap(), ByteArrayInputStream(ByteArray(0))
                     )
                 }
-                return loader.shouldInterceptRequest(request.url)
+                if (request.url.path?.startsWith("/_incoming/") == true) {
+                    return IncomingHandler(this@MainActivity).handle(request.url.path!!.removePrefix("/_incoming/"))
+                        ?: WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                }
+                return super.shouldInterceptRequest(view, request)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -198,8 +191,8 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) { /* no handler */ }
                 return true
             }
-        }
-        web.webChromeClient = object : WebChromeClient() {
+        })
+        web.webChromeClient = object : BridgeWebChromeClient(bridge) {
             override fun onShowFileChooser(
                 webView: WebView,
                 callback: ValueCallback<Array<Uri>>,
@@ -207,17 +200,16 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 chooserCallback?.onReceiveValue(null)
                 chooserCallback = callback
-                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE)
-                }
                 return try {
-                    chooserLauncher.launch(Intent.createChooser(intent, "Choose PDF"))
+                    val types = arrayOf("application/pdf")
+                    if (params.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                        multipleChooserLauncher.launch(types)
+                    } else {
+                        singleChooserLauncher.launch(types)
+                    }
                     true
                 } catch (e: Exception) {
-                    chooserCallback = null
-                    callback.onReceiveValue(null)
+                    finishFileChooser(null)
                     false
                 }
             }
@@ -230,28 +222,22 @@ class MainActivity : AppCompatActivity() {
         web.addJavascriptInterface(Bridge(), "AndroidBridge")
 
         handleIncoming(intent)
-        if (savedInstanceState == null) web.loadUrl("https://$HOST/index.html") else web.restoreState(savedInstanceState)
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        web.saveState(outState)
+        // Capacitor loads the bundled app and injects its JavaScript runtime.
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleIncoming(intent)
+        if (::web.isInitialized) handleIncoming(intent)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        applySystemBars()
+        web.evaluateJavascript("window.__syncSystemBars && window.__syncSystemBars()", null)
     }
 
     override fun onDestroy() {
         chooserCallback?.onReceiveValue(null)
-        web.destroy()
         super.onDestroy()
     }
 
@@ -263,6 +249,10 @@ class MainActivity : AppCompatActivity() {
             Configuration.UI_MODE_NIGHT_YES
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
         val c = WindowCompat.getInsetsController(window, root)
         c.isAppearanceLightStatusBars = !night
         c.isAppearanceLightNavigationBars = !night
@@ -306,6 +296,29 @@ class MainActivity : AppCompatActivity() {
 
     /** Exposed to the page as window.AndroidBridge. */
     inner class Bridge {
+        /** Explicit user copies go directly to Android's system clipboard. */
+        @JavascriptInterface
+        fun copyText(text: String): Boolean = try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("DePDF text", text))
+            true
+        } catch (_: Exception) {
+            false
+        }
+
+        /** Match system icons and the legacy WebView inset background to the app theme. */
+        @JavascriptInterface
+        fun syncAppearance(background: String, dark: Boolean) {
+            runOnUiThread {
+                try {
+                    root.setBackgroundColor(Color.parseColor(background))
+                    val controller = WindowCompat.getInsetsController(window, root)
+                    controller.isAppearanceLightStatusBars = !dark
+                    controller.isAppearanceLightNavigationBars = !dark
+                } catch (_: IllegalArgumentException) { }
+            }
+        }
+
         private var out: FileOutputStream? = null
         private var tmp: File? = null
         private var mime: String = "application/octet-stream"
@@ -551,37 +564,9 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-/** Serves the bundled web app from assets/www. */
-private class WwwHandler(private val context: Context) : WebViewAssetLoader.PathHandler {
-    override fun handle(path: String): WebResourceResponse? {
-        val p = if (path.isEmpty() || path.endsWith("/")) path + "index.html" else path
-        if (p.contains("..")) return null
-        return try {
-            val stream = context.assets.open("www/$p")
-            val mime = mimeFor(p)
-            val charset = if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json")) "utf-8" else null
-            WebResourceResponse(mime, charset, stream)
-        } catch (_: IOException) {
-            null
-        }
-    }
-
-    private fun mimeFor(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
-        "html" -> "text/html"
-        "js", "mjs" -> "text/javascript"
-        "css" -> "text/css"
-        "json", "webmanifest" -> "application/json"
-        "png" -> "image/png"
-        "svg" -> "image/svg+xml"
-        "wasm" -> "application/wasm"      // required for streaming WebAssembly compilation
-        "py" -> "text/plain"
-        else -> "application/octet-stream" // .whl, .zip
-    }
-}
-
 /** Serves a PDF that was opened with / shared to the app, from the app's private cache. */
-private class IncomingHandler(private val context: Context) : WebViewAssetLoader.PathHandler {
-    override fun handle(path: String): WebResourceResponse? {
+private class IncomingHandler(private val context: Context) {
+    fun handle(path: String): WebResourceResponse? {
         if (path != "current.pdf") return null
         val f = File(context.cacheDir, "incoming/current.pdf")
         if (!f.isFile) return null
