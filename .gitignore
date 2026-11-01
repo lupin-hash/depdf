@@ -10,3 +10,13 @@
 *.aab
 *.keystore
 *.jks
+
+/node_modules/
+/app/src/main/assets/public/
+/app/src/main/assets/capacitor.config.json
+/app/src/main/assets/capacitor.plugins.json
+/capacitor-cordova-android-plugins/
+/capacitor.settings.gradle
+/app/capacitor.build.gradle
+/dist/
+/app/src/main/res/xml/config.xml
