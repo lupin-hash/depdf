@@ -5,15 +5,24 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function textPdf() {
+function textPdf({ rich = false } = {}) {
   const stream = 'BT /F1 24 Tf 60 660 Td (Alpha) Tj 200 0 Td (Bravo) Tj 200 0 Td (Charlie) Tj -400 -200 Td (Delta Echo Foxtrot) Tj ET';
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
     `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  if (rich) {
+    objects[0] = '<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 9 0 R] >> >> >>';
+    objects[2] = objects[2].replace('/Contents 4 0 R', '/Annots [7 0 R 8 0 R] /Contents 4 0 R');
+    objects.push('<< /Title (Analysis example) /Author (<img src=x onerror=globalThis.injected=1>) >>',
+      '<< /Type /Annot /Subtype /Link /Rect [60 390 180 410] /A << /S /URI /URI (https://example.com/report) >> >>',
+      '<< /Type /Annot /Subtype /Text /Rect [400 400 420 420] /Contents (Reviewer note example) /T (Reviewer) >>',
+      '<< /Type /Filespec /F (notes.txt) /EF << /F 10 0 R >> >>',
+      '<< /Type /EmbeddedFile /Length 5 >>\nstream\nnotes\nendstream');
+  }
   let text = '%PDF-1.4\n'; const offsets = [0];
   objects.forEach((o, i) => { offsets.push(Buffer.byteLength(text)); text += `${i + 1} 0 obj\n${o}\nendobj\n`; });
   const xref = Buffer.byteLength(text);
-  text += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  text += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R ${rich ? "/Info 6 0 R" : ""} >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(text);
 }
 
@@ -40,10 +49,16 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
       constructor(...args) {
-        super(...args); this.requests = new Map();
+        super(...args); this.requests = new Map(); window.viewerWorker = this;
+        let testId = -1;
+        window.engineRpc = (cmd, payload) => new Promise((resolve, reject) => {
+          const id = testId--;
+          const receive = e => { if (e.data.id !== id) return; this.removeEventListener('message', receive); e.data.ok ? resolve(e.data) : reject(new Error(e.data.error)); };
+          this.addEventListener('message', receive); this.postMessage({ id, cmd, ...payload });
+        });
         this.addEventListener('message', e => { if (this.requests.get(e.data.id) === 'words' && e.data.ok) window.testWords = JSON.parse(e.data.json).lines.flatMap(l => l[4]); });
       }
-      postMessage(message, ...args) { this.requests.set(message.id, message.cmd); return super.postMessage(message, ...args); }
+      postMessage(message, ...args) { this.requests.set(message.id, message.cmd); if (message.job?.kind === 'analyze') window.analysisRequest = message.job; return super.postMessage(message, ...args); }
     };
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -177,6 +192,110 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
     await dock(a.x, a.y - 90); await page.mouse.move(a.x, a.y - 90); await page.mouse.down();
     await page.mouse.move(a.x, a.y); await page.mouse.move(c.x, c.y); await page.mouse.up();
     assert.equal(await copyCount(), count);
+  });
+  const richPdf = textPdf({ rich: true });
+  await t.test('analysis cards show affected text and pages without changing the original PDF', async () => {
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden);
+    await page.locator('#file-input').setInputFiles({ name: 'analysis-example.pdf', mimeType: 'application/pdf', buffer: richPdf });
+    await page.waitForFunction(() => window.testWords?.length === 6 && document.body.classList.contains('viewer-open'));
+    await page.evaluate(() => { document.querySelector('#top').value = '25'; });
+    await page.locator('#bubble').click();
+    await page.waitForFunction(() => Date.now() - document.querySelector('#modal-opts')._t > 420);
+    await page.locator('#o-analyze').click();
+    await page.locator('#modal-analysis').waitFor({ state: 'visible' });
+    const card = page.locator('#an-grid').getByRole('button', { name: /Text to remove/ });
+    await card.click();
+    assert.equal(await card.getAttribute('aria-expanded'), 'true');
+    const details = await page.locator('#an-detail-list').textContent();
+    for (const text of ['Page 1', 'Alpha', 'Bravo', 'Charlie']) assert(details.includes(text));
+    assert(!details.includes('Delta')); assert((await page.locator('#an-detail-description').textContent()).includes('nothing has been removed yet'));
+    const bytes = await page.evaluate(async () => Array.from(new Uint8Array((await window.engineRpc('get', { path: window.analysisRequest.input })).buffer)));
+    assert.deepEqual(bytes, Array.from(richPdf));
+    const cardBox = await page.locator('#modal-analysis .modal-card').evaluate(card => ({ width: card.clientWidth, scroll: card.scrollWidth }));
+    assert(cardBox.scroll <= cardBox.width + 1);
+    if (process.env.VIEWER_SCREENSHOT) await page.screenshot({ path: process.env.VIEWER_SCREENSHOT });
+    await page.locator('#an-detail-close').click();
+    assert.equal(await card.getAttribute('aria-expanded'), 'false');
+    assert(await card.evaluate(button => document.activeElement === button));
+  });
+  await t.test('summary cards explain links, notes, attachments and properties safely', async () => {
+    await page.locator('#an-grid').getByRole('button', { name: /Links/ }).click();
+    assert((await page.locator('#an-detail-description').textContent()).includes('printed words stay'));
+    assert((await page.locator('#an-detail-status').textContent()).includes('Removal is OFF'));
+    assert((await page.locator('#an-detail-list').textContent()).includes('https://example.com/report'));
+    await page.locator('#an-grid').getByRole('button', { name: /Annotations/ }).click();
+    assert((await page.locator('#an-detail-list').textContent()).includes('Reviewer note example'));
+    await page.locator('#an-grid').getByRole('button', { name: /Attachments/ }).click();
+    assert((await page.locator('#an-detail-list').textContent()).includes('notes.txt'));
+    await page.locator('#an-grid').getByRole('button', { name: /Metadata/ }).click();
+    assert((await page.locator('#an-detail-list').textContent()).includes('<img src=x onerror=globalThis.injected=1>'));
+    assert.equal(await page.locator('#an-detail-list img').count(), 0);
+    assert.equal(await page.evaluate(() => window.injected), undefined);
+    await page.locator('#an-plan').getByRole('button', { name: /Header/ }).click();
+    assert.equal(await page.locator('#an-detail-title').textContent(), 'Text affected by cleanup');
+  });
+  await t.test('analysis preview agrees with actual cleanup in the bundled web engine', async () => {
+    const words = await page.evaluate(async () => {
+      const job = { ...window.analysisRequest, kind: 'clean', output: '/out/analysis-check.pdf' };
+      await window.engineRpc('job', { job });
+      return JSON.parse((await window.engineRpc('words', { path: job.output, page: 0 })).json).lines.flatMap(l => l[4].map(w => w[4]));
+    });
+    assert.deepEqual(words, ['Delta', 'Echo', 'Foxtrot']);
+    const bytes = await page.evaluate(async () => Array.from(new Uint8Array((await window.engineRpc('get', { path: window.analysisRequest.input })).buffer)));
+    assert.deepEqual(bytes, Array.from(richPdf));
+  });
+  await t.test('batch analysis honors individual PDF settings and identifies the affected file', async () => {
+    await page.keyboard.press('Escape');
+    await page.locator('#batch-input').setInputFiles(['analysis-A.pdf', 'analysis-B.pdf'].map(name => ({ name, mimeType: 'application/pdf', buffer: richPdf })));
+    await page.waitForFunction(() => document.querySelectorAll('#batch-list img').length === 2);
+    await page.locator('#batch-list > li').first().click();
+    await page.locator('#card-preview').waitFor({ state: 'visible' });
+    await page.evaluate(() => { document.querySelector('#top').value = '0'; });
+    await page.locator('#viewer-back').click();
+    await page.locator('#bubble').click();
+    await page.waitForFunction(() => Date.now() - document.querySelector('#modal-opts')._t > 420);
+    await page.locator('#o-analyze').click();
+    await page.locator('#modal-analysis').waitFor({ state: 'visible' });
+    await page.locator('#an-grid').getByRole('button', { name: /Text to remove/ }).click();
+    const status = await page.locator('#an-detail-status').textContent();
+    assert(status.includes('analysis-A.pdf: No text removal is selected'));
+    assert(status.includes('analysis-B.pdf: 3 words'));
+    const detail = await page.locator('#an-detail-list').textContent();
+    assert(detail.includes('analysis-B.pdf')); assert(!detail.includes('analysis-A.pdf'));
+  });
+  await t.test('history cleanup is mandatory and explained in analysis', async () => {
+    assert(await page.locator('#opt-meta').isChecked()); assert(await page.locator('#opt-meta').isDisabled());
+    assert(await page.locator('#opt-extras').isChecked()); assert(await page.locator('#opt-extras').isDisabled());
+    await page.locator('#an-grid').getByRole('button', { name: /File history/ }).click();
+    assert((await page.locator('#an-detail-description').textContent()).includes('cloud backups'));
+    assert((await page.locator('#an-detail-description').textContent()).includes('Earlier saved revisions'));
+  });
+  await t.test('real bundled engine strips history from cleaned and unlocked exports, including encrypted sources', async () => {
+    for (const encrypted of [false, true]) {
+      const fixture = path.join(__dirname, 'fixtures', encrypted ? 'history-encrypted.pdf' : 'history-incremental.pdf');
+      const bytes = Array.from(fs.readFileSync(fixture));
+      for (const kind of ['clean', 'unlock']) {
+        const result = await page.evaluate(async ({ bytes, encrypted, kind }) => {
+          const input = '/in/history-fixture.pdf', output = '/out/history-fixture.pdf';
+          await window.engineRpc('put', { path: input, buffer: new Uint8Array(bytes).buffer });
+          const saved = await window.engineRpc('job', { job: { kind, input, output, password: encrypted ? 'fixture-reader' : '', options: { remove_metadata: false, remove_extras: false, remove_image_watermarks: false } } });
+          const inspected = await window.engineRpc('job', { job: { kind: 'analyze', input: output, options: { remove_metadata: false, remove_extras: false } } });
+          const words = JSON.parse((await window.engineRpc('words', { path: output, page: 0 })).json).lines.flatMap(l => l[4].map(w => w[4]));
+          const original = Array.from(new Uint8Array((await window.engineRpc('get', { path: input })).buffer));
+          const pdf = new TextDecoder().decode((await window.engineRpc('get', { path: output })).buffer);
+          return { original, words, details: inspected.details, report: saved.report, pdf };
+        }, { bytes, encrypted, kind });
+        assert.deepEqual(result.original, bytes);
+        assert.deepEqual(result.words, ['Current', 'version', 'only']);
+        assert.equal(result.details.metadata.total, 0); assert.equal(result.details.attachments.total, 0);
+        assert(result.details.history.items[0].text.includes('No earlier save chain detected'));
+        assert.equal((result.pdf.match(/startxref/g) || []).length, 1);
+        assert(!result.pdf.includes('/Prev '));
+        const sourcePdf = Buffer.from(bytes).toString('latin1');
+        const ids = text => [...(text.match(/\/ID\s*\[([^\]]*)\]/)?.[1] || '').matchAll(/<([0-9a-f]+)>/gi)].map(m => m[1].toLowerCase());
+        assert(ids(result.pdf).length > 0); assert(!ids(result.pdf).some(id => ids(sourcePdf).includes(id)));
+      }
+    }
   });
   await t.test('no uncaught page errors', () => assert.deepEqual(errors, []));
 });
