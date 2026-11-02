@@ -47,7 +47,7 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     window.copies = [];
-    window.AndroidBridge = { getVersion: () => '1.0', checkUpdate: () => {}, takeIncomingName: () => '', syncAppearance: () => {}, copyText: text => { window.copies.push(text); return true; } };
+    window.AndroidBridge = { getVersion: () => '1.0', checkUpdate: () => { window.updateChecks = (window.updateChecks || 0) + 1; }, takeIncomingName: () => '', syncAppearance: () => {}, copyText: text => { window.copies.push(text); return true; } };
     // Observe real word extraction without replacing any worker behavior.
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
@@ -65,7 +65,49 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
     };
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
-  await page.waitForFunction(() => document.querySelector('#boot').hidden, { timeout: 45000 });
+  await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
+  await t.test('startup eraser follows loading, completes the wipe, and supports retry and reduced motion', async () => {
+    for (const reducedMotion of ['no-preference', 'reduce']) {
+      const startup = await browser.newPage({ viewport: { width: 412, height: 915 }, reducedMotion });
+      await startup.addInitScript(() => {
+        const W = window.Worker;
+        window.Worker = class extends W { constructor(...args) { super(...args); window.startupWorker = this; } };
+      });
+      await startup.route('**/worker.js', route => route.fulfill({ contentType: 'text/javascript', body: `
+        let id;
+        onmessage = ({data}) => {
+          if (data.cmd === 'init') { id = data.id; postMessage({type:'boot', stage:'Loading runtime…', pct:50}); }
+          if (data.cmd === 'finish') postMessage({id, ok:true});
+          if (data.cmd === 'fail') postMessage({id, ok:false, error:'Test startup failure'});
+        };
+      ` }));
+      try {
+        await startup.goto('http://127.0.0.1:' + server.address().port);
+        await startup.waitForFunction(() => document.querySelector('#boot-track').style.getPropertyValue('--erased') === '50%');
+        assert.equal(await startup.locator('#boot img[src="icons/icon-192.png"]').count(), 0);
+        assert(await startup.locator('.boot-eraser img').evaluate(img => img.complete && img.naturalWidth > 0));
+        if (reducedMotion === 'reduce') assert.equal(await startup.locator('.boot-eraser img').evaluate(img => getComputedStyle(img).animationName), 'none');
+        if (process.env.UI_SCREENSHOTS_DIR) {
+          fs.mkdirSync(process.env.UI_SCREENSHOTS_DIR, {recursive:true});
+          await startup.screenshot({path:path.join(process.env.UI_SCREENSHOTS_DIR, 'boot-' + reducedMotion + '.png')});
+        }
+        await startup.evaluate(() => window.startupWorker.postMessage({cmd:'fail'}));
+        await startup.locator('#boot-retry').waitFor({state:'visible'});
+        assert(await startup.locator('#boot').evaluate(node => node.classList.contains('boot-failed')));
+        await startup.locator('#boot-retry').click();
+        await startup.waitForFunction(() => !document.querySelector('#boot').classList.contains('boot-failed'));
+        await startup.evaluate(() => window.startupWorker.postMessage({cmd:'finish'}));
+        await startup.waitForFunction(() => document.querySelector('#boot').hidden);
+        assert.equal(await startup.locator('#boot-track').evaluate(node => node.style.getPropertyValue('--erased')), '100%');
+        assert(await startup.locator('#m-upload').isVisible());
+        await startup.locator('#m-settings').click();
+        const eraser = startup.getByRole('radio', {name:'Eraser', exact:true});
+        assert.equal(await eraser.locator('img').getAttribute('src'), 'icons/tool-eraser.png');
+        await eraser.click();
+        assert.equal(await startup.locator('#bubble .art-eraser').getAttribute('src'), 'icons/tool-eraser.png');
+      } finally { await startup.close(); }
+    }
+  });
   await t.test('redesigned home stays usable on phones and wide screens without the launcher icon or old tagline', async () => {
     assert.equal(await page.locator('.top img').count(), 0);
     assert(!(await page.locator('#app').textContent()).includes('for data extraction'));
@@ -217,7 +259,7 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
   });
   const richPdf = textPdf({ rich: true });
   await t.test('analysis cards show affected text and pages without changing the original PDF', async () => {
-    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden);
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
     await page.locator('#file-input').setInputFiles({ name: 'analysis-example.pdf', mimeType: 'application/pdf', buffer: richPdf });
     await page.waitForFunction(() => window.testWords?.length === 6 && document.body.classList.contains('viewer-open'));
     await page.evaluate(() => { document.querySelector('#top').value = '25'; });
@@ -319,8 +361,33 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
       }
     }
   });
+  await t.test('unlocked cache is bound to document bytes, including across reloads', async () => {
+    const source = fs.readFileSync(path.join(__dirname, 'fixtures/history-encrypted.pdf'));
+    const other = textPdf();
+    const size = Math.max(source.length, other.length);
+    const padded = bytes => Buffer.concat([bytes, Buffer.alloc(size - bytes.length, 32)]);
+    async function select(bytes) {
+      await page.evaluate(bytes => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([new Uint8Array(bytes)], 'same-name.pdf', { type: 'application/pdf', lastModified: 1700000000000 }));
+        const input = document.querySelector('#file-input');
+        input.files = transfer.files; input.dispatchEvent(new Event('change'));
+      }, [...bytes]);
+    }
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
+    await select(padded(source));
+    await page.locator('#mp-input').fill('fixture-reader'); await page.locator('#mp-ok').click();
+    await page.waitForFunction(() => document.querySelector('#busy').hidden && document.querySelector('#prev-img').src.startsWith('blob:'));
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
+    await select(padded(source));
+    await page.waitForFunction(() => document.querySelector('#busy').hidden && document.querySelector('#prev-img').src.startsWith('blob:'));
+    assert(!(await page.locator('#modal-password').isVisible()), 'identical bytes may reuse the unlocked copy');
+    await select(padded(other));
+    await page.waitForFunction(() => window.testWords?.some(w => w[4] === 'Alpha'));
+    assert.equal(await page.locator('#vt-name').textContent(), 'same-name.pdf');
+  });
   await t.test('touch swipes do not change the PDF page; visible arrows navigate and respect page boundaries', async () => {
-    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden);
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
     await page.locator('#file-input').setInputFiles({ name: 'two-pages.pdf', mimeType: 'application/pdf', buffer: textPdf({ pages: 2 }) });
     await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 1 of 2');
     assert(await page.locator('#pg-prev').isVisible()); assert(await page.locator('#pg-next').isVisible());
@@ -342,6 +409,72 @@ test('PDF viewer interactions (real bundled PDF engine; simulated Android clipbo
     await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 2 of 2');
     await page.keyboard.press('ArrowLeft');
     await page.waitForFunction(() => document.querySelector('#pg-label').textContent === 'Page 1 of 2');
+  });
+  await t.test('updates appear only below Make it yours and checks stay manual', async () => {
+    await page.evaluate(() => localStorage.setItem('pdfcleaner.settings.v1', JSON.stringify({autoUpdate: true})));
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
+    assert.equal(await page.evaluate(() => window.updateChecks || 0), 0);
+    assert(!(await page.locator('#upd-top').isVisible()));
+    for (const status of ['ok', 'none', 'error', 'not_configured']) {
+      await page.evaluate(status => window.__onUpdateResult(JSON.stringify({status, current:'1.0'})), status);
+      assert(!(await page.locator('#upd-top').isVisible()));
+    }
+    await page.evaluate(() => window.__onUpdateResult(JSON.stringify({status:'update', latest:'2.0', current:'1.0', notes:'DO NOT DISPLAY CHANGELOG', url:'https://github.com/mken4750-hash/depdf/releases/latest'})));
+    assert(await page.locator('#upd-top').isVisible());
+    assert.equal(await page.locator('#upd-top').getAttribute('class'), 'menu-btn');
+    assert(await page.evaluate(() => document.querySelector('#m-settings').nextElementSibling.id === 'upd-top'));
+    assert(!(await page.locator('body').textContent()).includes('DO NOT DISPLAY CHANGELOG'));
+    for (const width of [320, 412, 960]) {
+      await page.setViewportSize({width, height:915});
+      const update = await page.locator('#upd-top').boundingBox(), note = await page.locator('.home-note').boundingBox();
+      assert(note.y >= update.y + update.height);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+    await page.locator('#upd-top').click();
+    assert(await page.locator('#card-update').isVisible());
+    assert.deepEqual(await page.locator('.settings > section h2').allTextContents(), ['Saved PDF passwords', 'Appearance', 'Lighter visuals', 'App updates', 'Credits', 'Responsible use']);
+    assert.equal(await page.locator('#opt-autoupd, #upd-notes').count(), 0);
+    await page.locator('#upd-check').click();
+    assert.equal(await page.evaluate(() => window.updateChecks), 1);
+    await page.evaluate(() => window.__onUpdateResult(JSON.stringify({status:'ok', current:'2.0'})));
+    await page.locator('#back-btn').click();
+    assert(!(await page.locator('#upd-top').isVisible()));
+    await page.setViewportSize({width:412, height:915});
+  });
+  await t.test('forgetting PDF passwords lists filenames safely and requires confirmation', async () => {
+    await page.evaluate(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open('pdfcleaner-unlocked', 2);
+      request.onsuccess = () => {
+        const tx = request.result.transaction(['meta', 'files'], 'readwrite');
+        tx.objectStore('meta').clear(); tx.objectStore('files').clear();
+        for (const [key, name] of [['one','private.pdf'], ['two','<img src=x onerror=globalThis.injected=1>.pdf']]) {
+          tx.objectStore('meta').put({key, name, size:10, t:Date.now()});
+          tx.objectStore('files').put({key, buffer:new ArrayBuffer(10)});
+        }
+        tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+      };
+    }));
+    await page.locator('#m-settings').click();
+    await page.locator('#uc-clear').click();
+    await page.locator('#mc-list li').first().waitFor({ state: 'visible' });
+    assert.deepEqual(await page.locator('#mc-list li').allTextContents(), ['private.pdf', '<img src=x onerror=globalThis.injected=1>.pdf']);
+    assert.equal(await page.locator('#mc-list img').count(), 0);
+    await page.locator('#mc-cancel').click();
+    assert(await page.locator('#uc-clear').isEnabled());
+    await page.locator('#uc-clear').click(); await page.locator('#mc-ok').waitFor({state:'visible'}); await page.keyboard.press('Escape');
+    assert(await page.locator('#uc-clear').isEnabled());
+    await page.locator('#uc-clear').click(); await page.locator('#mc-ok').click();
+    await page.waitForFunction(() => document.querySelector('#uc-clear').disabled);
+    assert.equal(await page.evaluate(() => globalThis.injected), undefined);
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#boot').hidden, null, { timeout: 45000 });
+    await page.locator('#m-settings').click();
+    await page.waitForFunction(() => document.querySelector('#uc-clear').disabled && document.querySelector('#uc-label').textContent === 'No saved PDF passwords');
+    if (process.env.UI_SCREENSHOTS_DIR) {
+      for (const theme of ['Dark', 'Light']) {
+        await page.locator('.theme-chip').filter({hasText: new RegExp('^' + theme + '$')}).click();
+        await page.screenshot({path:path.join(process.env.UI_SCREENSHOTS_DIR, 'settings-final-' + theme.toLowerCase() + '.png'), fullPage:true});
+      }
+    }
   });
   await t.test('no uncaught page errors', () => assert.deepEqual(errors, []));
 });
