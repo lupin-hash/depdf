@@ -30,6 +30,10 @@ The home screen uses a text-only DePDF header, one primary PDF action, and compa
 
 Settings contains the **DePDF developer** credit and acknowledgments for PyMuPDF, Pyodide and Capacitor. The responsible-use disclaimer asks users to edit only PDFs they own or have permission to modify, explains permanent changes and backups, and describes the developer’s warranty/liability limits subject to applicable law.
 
+Settings starts with **Saved PDF passwords**, followed by Appearance, Lighter visuals, App updates and Credits. Forgetting passwords first shows a confirmation listing the saved PDFs; confirming removes their saved unlocked copies, not the originals. Responsible use is the final section, with an orange surface and a red disclaimer button (adapted for dark mode).
+
+Unlocked copies are identified by SHA-256 of the original PDF bytes, so files with matching names, lengths and timestamps cannot substitute for one another. Upgrading from the old cache clears its saved copies once; open those encrypted PDFs with their passwords again. Shared Android imports accept content URIs, cap actual copied bytes at 250 MB, and allow one import at a time.
+
 ## PDF viewer gestures
 
 Pinch to zoom, drag to pan, or double-tap to toggle zoom. On a computer, use Ctrl/Cmd + wheel or `+`, `-`, and `0`. Zoom animations respect reduced-motion settings.
@@ -64,7 +68,7 @@ Off by default (Other cleanup -> *Remove hidden / tracker text*). It detects and
 
 ## Updates
 
-Settings has an **App updates** card with a **Check for updates** button (and an opt-in daily auto-check). If a newer GitHub release exists, an **Update available** banner appears at the top and the card shows the release notes and a **Download** button that opens the APK in your browser.
+Settings has an **App updates** card with a manual **Check for updates** button. Only when that check reports a newer GitHub release, an **Update available** menu button appears below **Make it yours**, above **Your files stay yours**. It opens the update settings and download action. Release notes are not displayed; there are no automatic checks.
 
 - This adds the `INTERNET` permission. It is used by one function (`MainActivity.fetchUpdateInfo`): a single HTTPS GET to `api.github.com`. Nothing from your device is sent.
 - The web layer is blocked from the network in `shouldInterceptRequest`.
@@ -74,6 +78,7 @@ Settings has an **App updates** card with a **Check for updates** button (and an
 - To choose an exact version for the next main push, run `npm version 1.0.6 --no-git-tag-version`, then commit and push the resulting `package.json` and `package-lock.json` changes with your app changes. A package version newer than all existing release tags is used exactly.
 - Alternatively, attach `v1.0.6` (or `1.0.6`) to the new commit and push the branch and tag together: `git push --atomic origin main v1.0.6`. The main workflow uses that existing tag’s exact version. Pushing a tag by itself deliberately does not build; do not push main first and expect a later tag to change an APK already built.
 - **Actions → Build APK → Run workflow**, with `main` selected, also accepts an optional exact version such as `1.0.6`. Leaving it blank uses automatic versioning. A completed release on the same commit is reused on retries. Existing tags are never moved, and a version already assigned to another commit is rejected.
+- Publishing requires the configured release signing key and credentials. Missing signing configuration stops the workflow rather than publishing a debuggable APK. Local `assembleDebug` builds remain available for development.
 - The workflow publishes the same APK to the Actions artifact and GitHub release; these are two download locations for one build. It does not create an extra version-bump commit. Commits marked `[skip ci]` skip automatic builds.
 
 
