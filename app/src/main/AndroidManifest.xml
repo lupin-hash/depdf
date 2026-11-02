@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- INTERNET is used ONLY by the "Check for updates" feature (MainActivity.fetchUpdateInfo):
-         one HTTPS GET to api.github.com, started by the user (or by the opt-in auto-check).
+         one HTTPS GET to api.github.com, started by the user.
          The web layer that handles your PDFs is blocked from the network (see shouldInterceptRequest). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
