@@ -39,6 +39,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
@@ -58,6 +61,8 @@ class MainActivity : BridgeActivity() {
     private var chooserCallback: ValueCallback<Array<Uri>>? = null
     private var pendingSave: File? = null
     private var treeUri: Uri? = null
+    private val importing = AtomicBoolean(false)
+    private val incomingStream = AtomicReference<InputStream?>(null)
 
     /** File name of a PDF sent to the app ("Open with" / Share), until the web page picks it up. */
     @Volatile private var incomingName: String = ""
@@ -237,6 +242,7 @@ class MainActivity : BridgeActivity() {
     }
 
     override fun onDestroy() {
+        try { incomingStream.getAndSet(null)?.close() } catch (_: IOException) { }
         chooserCallback?.onReceiveValue(null)
         super.onDestroy()
     }
@@ -268,18 +274,53 @@ class MainActivity : BridgeActivity() {
             Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             else -> null
         }
-        if (uri == null) return
+        if (uri == null || uri.scheme != "content") return
+        // One bounded import at a time: exported intents must not spawn unlimited writers.
+        if (!importing.compareAndSet(false, true)) {
+            toast("A PDF is already being imported")
+            return
+        }
         Thread {
+            var staged: File? = null
+            val expired = AtomicBoolean(false)
+            val timeout = java.util.Timer(true)
             try {
                 val dir = File(cacheDir, "incoming").apply { mkdirs() }
-                val dst = File(dir, "current.pdf")
+                staged = File.createTempFile("import-", ".pdf", dir)
                 contentResolver.openInputStream(uri)?.use { input ->
-                    dst.outputStream().use { input.copyTo(it) }
+                    incomingStream.set(input)
+                    timeout.schedule(object : java.util.TimerTask() {
+                        override fun run() {
+                            expired.set(true)
+                            try { input.close() } catch (_: IOException) { }
+                        }
+                    }, 30_000L)
+                    staged.outputStream().use { out ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            if (expired.get() || isDestroyed) throw IOException("PDF import stopped")
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > 250L * 1024 * 1024) throw IOException("PDF exceeds the 250 MB import limit")
+                            out.write(buffer, 0, count)
+                        }
+                    }
                 } ?: throw IOException("Cannot open the shared file")
-                incomingName = displayName(uri) ?: "document.pdf"
+                if (expired.get() || isDestroyed) throw IOException("PDF import stopped")
+                val name = displayName(uri) ?: "document.pdf"
+                val dst = File(dir, "current.pdf")
+                if (!staged.renameTo(dst)) throw IOException("Cannot finish the PDF import")
+                incomingName = name
                 runOnUiThread { web.evaluateJavascript("window.__onIncoming && window.__onIncoming()", null) }
             } catch (e: Exception) {
                 toast("Couldn't open the PDF: ${e.message}")
+            } finally {
+                timeout.cancel()
+                incomingStream.set(null)
+                staged?.delete()
+                importing.set(false)
             }
         }.start()
     }
@@ -448,7 +489,7 @@ class MainActivity : BridgeActivity() {
 
     /**
      * One HTTPS GET to the GitHub API for the latest release. Sends no personal data and no files.
-     * Returns JSON: {status: ok|update|none|not_configured|error, current, latest, url, apk, notes, error}.
+     * Returns JSON: {status: ok|update|none|not_configured|error, current, latest, url, apk, error}.
      */
     private fun fetchUpdateInfo(): String {
         val out = JSONObject()
@@ -495,7 +536,7 @@ class MainActivity : BridgeActivity() {
             out.put("latest", tag)
             out.put("url", page)
             out.put("apk", apk)
-            out.put("notes", json.optString("body").trim().take(800))
+            // Release notes are intentionally omitted from the update UI.
             out.put("status", if (tag.isNotEmpty() && isNewer(tag, current)) "update" else "ok")
         } catch (e: java.net.UnknownHostException) {
             out.put("status", "error").put("error", "No internet connection")
