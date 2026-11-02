@@ -16,13 +16,12 @@
     header: "", footer: "",
     watermark: "", imgWm: true, xrefs: "",
     meta: true, annots: false, links: false, extras: true, hidden: false,
-    autoUpdate: false,
     theme: "system", accent: 0, lite: LITE_AUTO,
   };
   const STORE_KEY = "pdfcleaner.settings.v1";
 
   const el = {
-    boot: $("#boot"), bootStage: $("#boot-stage"), bootBar: $("#boot-bar"), bootNote: $("#boot-note"), bootRetry: $("#boot-retry"),
+    boot: $("#boot"), bootStage: $("#boot-stage"), bootBar: $("#boot-bar"), bootTrack: $("#boot-track"), bootNote: $("#boot-note"), bootRetry: $("#boot-retry"),
     app: $("#app"), bar: $("#actionbar"), pill: $("#pill"), pillText: $("#pill-text"),
     fileInput: $("#file-input"), batchInput: $("#batch-input"),
     top: $("#top"), topRange: $("#top-range"), bottom: $("#bottom"), bottomRange: $("#bottom-range"), regions: $("#regions"),
@@ -38,7 +37,7 @@
     ovl: $("#busy"), ovlTitle: $("#busy-title"), ovlDetail: $("#busy-detail"), ovlProg: $("#busy-prog"), ovlFill: $("#busy-prog-fill"),
     ovlPct: $("#busy-pct"), ovlEta: $("#busy-eta"), ovlElapsed: $("#busy-elapsed"), ovlNote: $("#busy-note"), ovlNoteText: $("#busy-note-text"),
     updCard: $("#card-update"), appVer: $("#app-ver"), updStatus: $("#upd-status"), updCheck: $("#upd-check"), updCheckLabel: $("#upd-check-label"),
-    updGet: $("#upd-get"), updGetLabel: $("#upd-get-label"), updNotes: $("#upd-notes"), autoUpd: $("#opt-autoupd"), lite: $("#opt-lite"),
+    updGet: $("#upd-get"), updGetLabel: $("#upd-get-label"), lite: $("#opt-lite"),
     updTop: $("#upd-top"), updTopTitle: $("#upd-top-title"),
   };
 
@@ -212,19 +211,29 @@
    * ------------------------------------------------------------------ */
   function bootProgress(stage, pct) {
     el.bootStage.textContent = stage;
-    el.bootBar.style.width = pct + "%";
+    // Reserve the last part of the wipe until initialization actually succeeds.
+    const progress = Math.max(0, Math.min(94, Number(pct) || 0));
+    el.bootTrack.style.setProperty("--erased", progress + "%");
   }
   function bootFail(msg) {
+    el.boot.classList.add("boot-failed");
     el.bootStage.textContent = "Couldn't start the PDF engine";
     el.bootNote.textContent = msg + " Check your connection (the first launch needs to download the engine) and try again.";
     el.bootRetry.hidden = false;
   }
   async function boot() {
     el.bootRetry.hidden = true;
+    el.boot.classList.remove("boot-failed", "boot-finished");
     startWorker();
     try {
       await rpc("init");
     } catch (err) { return bootFail(err.message); }
+    el.bootStage.textContent = "Ready";
+    el.bootTrack.style.setProperty("--erased", "100%");
+    el.boot.classList.add("boot-finished");
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches && !document.documentElement.classList.contains("lite")) {
+      await new Promise(resolve => setTimeout(resolve, 550));
+    }
     state.ready = true;
     el.boot.hidden = true;
     el.app.hidden = false;
@@ -268,7 +277,7 @@
       header: el.header.value, footer: el.footer.value,
       watermark: el.watermark.value, imgWm: el.imgWm.checked, xrefs: el.xrefs.value,
       meta: el.meta.checked, annots: el.annots.checked, links: el.links.checked, extras: el.extras.checked, hidden: el.hidden.checked,
-      autoUpdate: el.autoUpd.checked, lite: el.lite.checked,
+      lite: el.lite.checked,
       theme: look.theme, accent: look.accent, v: 3,
     };
   }
@@ -276,7 +285,7 @@
     el.top.value = s.top; el.bottom.value = s.bottom; el.regions.value = s.regions;
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
-    el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.autoUpd.checked = !!s.autoUpdate; el.lite.checked = !!s.lite; applyLite();
+    el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.lite.checked = !!s.lite; applyLite();
     look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "system";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
     applyAppearance();
@@ -311,7 +320,7 @@
     r.addEventListener("input", () => { t.value = String(r.value); syncRange(t, r); renderOverlay(); persist(); });
     t.addEventListener("input", () => { syncRange(t, r); renderOverlay(); persist(); });
   });
-  [el.regions, el.header, el.footer, el.watermark, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.autoUpd, el.lite].forEach((n) =>
+  [el.regions, el.header, el.footer, el.watermark, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.lite].forEach((n) =>
     n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); })
   );
   el.reset.addEventListener("click", () => { applySettings(DEFAULTS); persist(); toast("Settings reset to defaults"); });
@@ -356,9 +365,10 @@
       if (state.cleanPath) await rpc("rm", { paths: [state.cleanPath] });
       state.cleanPath = null; state.cleanName = null;
       clearOutputs();
-      const key = file.name + "|" + file.size + "|" + file.lastModified;
+      const original = await file.arrayBuffer();
+      const key = await pdfCacheKey(original);
       const cached = await ucGet(key);
-      const buf = cached || (await file.arrayBuffer());
+      const buf = cached || original;
       const path = "/in/main/" + safeName(file.name);
       await rpc("put", { path, buffer: buf }, [buf]);
       state.file = file; state.inPath = path; state.page = 0; state.previewSrc = "orig";
@@ -1050,7 +1060,6 @@
    * App updates (Android app only). The network request is made by the *
    * native layer; this page never touches the internet.                *
    * ------------------------------------------------------------------ */
-  const UPD_TS_KEY = "pdfcleaner.lastUpdateCheck";
   const upd = { checking: false, silent: false, timer: 0, info: null };
 
   function updSetChecking(on) {
@@ -1064,13 +1073,12 @@
     el.updCard.classList.add("has-update");
     el.updStatus.textContent = "Version " + info.latest + " is available. You have " + info.current + ".";
     el.updGet.hidden = false; el.updGetLabel.textContent = info.apk ? "Download " + info.latest : label;
-    el.updNotes.hidden = !info.notes; el.updNotes.textContent = info.notes || "";
     el.updTop.hidden = false; el.updTopTitle.textContent = "Update available: " + info.latest;
   }
   function updClearAvailable() {
     upd.info = null;
     el.updCard.classList.remove("has-update");
-    el.updGet.hidden = true; el.updNotes.hidden = true; el.updTop.hidden = true;
+    el.updGet.hidden = true; el.updTop.hidden = true;
   }
   window.__onUpdateResult = (json) => {
     clearTimeout(upd.timer);
@@ -1078,7 +1086,6 @@
     updSetChecking(false);
     let r;
     try { r = JSON.parse(json); } catch (e) { r = { status: "error", error: "Unexpected answer" }; }
-    try { localStorage.setItem(UPD_TS_KEY, String(Date.now())); } catch (e) { /* ignore */ }
     if (r.status === "update") { updShowAvailable(r); if (!silent) toast("Update available: " + r.latest); return; }
     updClearAvailable();
     if (silent) return;
@@ -1105,12 +1112,8 @@
     try { el.appVer.textContent = "Version " + NATIVE.getVersion(); } catch (e) { /* ignore */ }
     el.updCheck.addEventListener("click", () => checkForUpdates(false));
     el.updGet.addEventListener("click", () => { if (upd.info) NATIVE.openUrl(upd.info.apk || upd.info.url); });
-    el.updTop.addEventListener("click", () => el.updCard.scrollIntoView({ behavior: "smooth", block: "center" }));
-    if (el.autoUpd.checked) {
-      let last = 0;
-      try { last = Number(localStorage.getItem(UPD_TS_KEY)) || 0; } catch (e) { /* ignore */ }
-      if (Date.now() - last > 24 * 3600 * 1000) checkForUpdates(true);
-    }
+    el.updTop.addEventListener("click", () => { go("settings"); el.updCard.scrollIntoView({ behavior: "smooth", block: "center" }); });
+
   }
 
 
@@ -1225,6 +1228,10 @@
       b.type = "button"; b.className = "theme-chip"; b.setAttribute("role", "radio");
       b.setAttribute("aria-checked", String(look.theme === t.id));
       const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = t.sw;
+      if (t.id === "eraser") {
+        const image = document.createElement("img"); image.src = "icons/tool-eraser.png"; image.alt = "";
+        sw.classList.add("eraser-swatch"); sw.style.background = "var(--surface-2)"; sw.append(image);
+      }
       const nm = document.createElement("span"); nm.textContent = t.name;
       b.append(sw, nm);
       b.addEventListener("click", () => { look.theme = t.id; look.accent = 0; applyAppearance(); persist(); });
@@ -1548,10 +1555,12 @@
   /* ------------------------------------------------------------------ *
    * Confirm window, limits, cancel                                     *
    * ------------------------------------------------------------------ */
-  function confirmBox({ title, text, ok = "Continue", cancel = "Cancel" }) {
+  function confirmBox({ title, text, items = [], ok = "Continue", cancel = "Cancel" }) {
     return new Promise((resolve) => {
       const m = $("#modal-confirm"), okB = $("#mc-ok"), noB = $("#mc-cancel");
       $("#mc-title").textContent = title; $("#mc-text").textContent = text;
+      const list = $("#mc-list"); list.replaceChildren(); list.hidden = !items.length;
+      for (const name of items) { const item = document.createElement("li"); item.textContent = name; list.appendChild(item); }
       okB.textContent = ok; noB.textContent = cancel || ""; noB.hidden = !cancel;
       let done = false;
       const finish = (v) => { if (done) return; done = true; m.removeEventListener("modalclose", onClose); resolve(v); closeModal(m); };
@@ -1601,11 +1610,21 @@
   const UC = { db: null, MAX_N: 3, MAX_BYTES: 150 * MB, MAX_ONE: 60 * MB };
   const ucReq = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const ucDone = (tx) => new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+  async function pdfCacheKey(buffer) {
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
+    return "sha256:" + [...hash].map(b => b.toString(16).padStart(2, "0")).join("");
+  }
   function ucDb() {
     return new Promise((res, rej) => {
       if (UC.db) return res(UC.db);
-      const r = indexedDB.open("pdfcleaner-unlocked", 1);
-      r.onupgradeneeded = () => { r.result.createObjectStore("meta", { keyPath: "key" }); r.result.createObjectStore("files", { keyPath: "key" }); };
+      const r = indexedDB.open("pdfcleaner-unlocked", 2);
+      r.onupgradeneeded = () => {
+        // Old metadata-only keys cannot safely identify an encrypted document.
+        for (const name of ["meta", "files"]) {
+          if (r.result.objectStoreNames.contains(name)) r.result.deleteObjectStore(name);
+          r.result.createObjectStore(name, { keyPath: "key" });
+        }
+      };
       r.onsuccess = () => { UC.db = r.result; res(UC.db); };
       r.onerror = () => rej(r.error);
     });
@@ -1652,22 +1671,33 @@
     } catch (e) { /* ignore */ }
   }
   async function ucClear() {
-    try {
-      const db = await ucDb();
-      const tx = db.transaction(["meta", "files"], "readwrite");
-      tx.objectStore("meta").clear(); tx.objectStore("files").clear();
-      await ucDone(tx);
-    } catch (e) { /* ignore */ }
+    const db = await ucDb();
+    const tx = db.transaction(["meta", "files"], "readwrite");
+    tx.objectStore("meta").clear(); tx.objectStore("files").clear();
+    await ucDone(tx);
   }
   async function ucCount() {
     try { const db = await ucDb(); return await ucReq(db.transaction("meta").objectStore("meta").count()); } catch (e) { return 0; }
   }
   async function refreshUc() {
     const n = await ucCount();
-    $("#uc-label").textContent = n ? "Forget unlocked PDFs (" + n + ")" : "No unlocked PDFs saved";
+    $("#uc-label").textContent = n ? "Forget PDF passwords (" + n + ")" : "No saved PDF passwords";
     $("#uc-clear").disabled = !n;
   }
-  $("#uc-clear").addEventListener("click", async () => { await ucClear(); await refreshUc(); toast("Unlocked PDFs forgotten"); });
+  $("#uc-clear").addEventListener("click", async () => {
+    try {
+      const db = await ucDb();
+      const files = await ucReq(db.transaction("meta").objectStore("meta").getAll());
+      if (!files.length) { await refreshUc(); return; }
+      const confirmed = await confirmBox({
+        title: "Forget these PDF passwords?",
+        text: "Remove the saved unlocked copies listed below. Their passwords will be needed next time. Your original PDFs won’t be deleted.",
+        items: files.map(file => file.name), ok: "Forget passwords",
+      });
+      if (!confirmed) return;
+      await ucClear(); await refreshUc(); toast("Saved PDF passwords forgotten");
+    } catch (e) { toast("Couldn’t forget saved PDFs. Try again.", true); }
+  });
   async function saveUnlockedCopy(file, key, path, pw) {
     try {
       setStatus("Saving an unlocked copy…");
@@ -1676,7 +1706,7 @@
       const got = await rpc("get", { path: out });
       await rpc("rm", { paths: [path] });
       state.inPath = out; state.pw = ""; state.unlocked = true; state.ucKey = key;
-      ucPut(key, file.name, got.buffer);
+      await ucPut(key, file.name, got.buffer);
     } catch (err) {
       if (err && err.cancelled) throw err;
     }
@@ -1884,8 +1914,11 @@
 
   async function loadItem(item) {
     item.orig = "/in/batch/" + item.id + "_" + safeName(item.name);
-    const cached = await ucGet(item.key);
-    const buf = cached || (await item.file.arrayBuffer());
+    const original = await item.file.arrayBuffer();
+    item.cacheKey = await pdfCacheKey(original);
+    item.key = item.name + "|" + item.cacheKey;
+    const cached = await ucGet(item.cacheKey);
+    const buf = cached || original;
     await rpc("put", { path: item.orig, buffer: buf }, [buf]);
     item.work = item.orig; item.gen = state.engineGen;
     if (cached) { item.locked = true; item.unlocked = true; return; }
@@ -1906,7 +1939,7 @@
     const got = await rpc("get", { path: out });
     await rpc("rm", { paths: [item.orig] });
     item.work = out; item.unlocked = true; item.pw = pw;
-    ucPut(item.key, item.name, got.buffer);
+    await ucPut(item.cacheKey, item.name, got.buffer);
     await thumbFor(item);
   }
   async function ensureItem(item) {
@@ -1919,7 +1952,6 @@
   async function addBatchFiles(list) {
     const have = new Set(batch.items.map((i) => i.key));
     let files = list.filter((f) => isPdf(f) && !/_clean$/i.test(stemOf(f.name)));
-    files = files.filter((f) => !have.has(f.name + "|" + f.size + "|" + f.lastModified));
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     if (!files.length) { toast("No new PDFs to add.", true); return; }
     const tooLarge = files.filter((f) => f.size > MAX_MB * MB);
@@ -1937,7 +1969,7 @@
         const f = files[k];
         setStatus((k + 1) + " of " + files.length + ": " + f.name); setProgress((k / files.length) * 100);
         const it = { id: ++batch.seq, file: f, name: f.name, key: f.name + "|" + f.size + "|" + f.lastModified, pages: 0, locked: false, unlocked: false, pw: "", thumb: "", opts: null, status: "", error: "" };
-        try { await loadItem(it); await thumbFor(it); batch.items.push(it); } catch (err) { if (err.cancelled) throw err; failed.push(f.name); }
+        try { await loadItem(it); if (have.has(it.key)) { await rpc("rm", { paths: [it.orig] }); continue; } have.add(it.key); await thumbFor(it); batch.items.push(it); } catch (err) { if (err.cancelled) throw err; failed.push(f.name); }
       }
     } finally { setBusy(false, "Ready"); }
     renderBatch(); syncBatchItem();
@@ -2011,7 +2043,7 @@
       state.stash = Object.fromEntries(SINGLE_FIELDS.map((k) => [k, state[k]]));
       state.itemIdx = i; state.itemMode = true; state.globalSnap = snapOptions();
       if (it.opts) applyOptions(it.opts);
-      Object.assign(state, { file: it.file, inPath: it.work, pw: "", pages: it.pages, page: 0, previewSrc: "orig", locked: it.locked, unlocked: !isLocked(it), ucKey: it.key, cleanPath: null, cleanName: null });
+      Object.assign(state, { file: it.file, inPath: it.work, pw: "", pages: it.pages, page: 0, previewSrc: "orig", locked: it.locked, unlocked: !isLocked(it), ucKey: it.cacheKey, cleanPath: null, cleanName: null });
       go("upload", "single");
       el.prevCard.hidden = false; $("#vt-name").textContent = it.name; syncViewer();
       setSeg("orig"); el.seg.querySelector('[data-src="clean"]').disabled = true;

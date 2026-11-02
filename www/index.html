@@ -51,10 +51,12 @@
 <!-- Boot screen (first launch loads the PDF engine, later launches are instant & offline) -->
 <div id="boot" role="status" aria-live="polite">
   <div class="boot-card">
-    <img src="icons/icon-192.png" alt="" width="84" height="84">
     <h1>DePDF</h1>
     <p id="boot-stage">Starting…</p>
-    <div class="bar"><i id="boot-bar"></i></div>
+    <div class="boot-track" id="boot-track" aria-hidden="true">
+      <i id="boot-bar"></i>
+      <span class="boot-eraser"><img src="icons/tool-eraser.png" alt="" width="64" height="64" draggable="false"></span>
+    </div>
     <p class="boot-note" id="boot-note">First launch loads the PDF engine (~30&nbsp;MB).</p>
     <button class="btn primary" id="boot-retry" hidden>Try again</button>
   </div>
@@ -74,12 +76,6 @@
     <h2 id="sub-title"></h2>
   </div>
 
-  <button class="upd-banner" id="upd-top" type="button" hidden>
-    <svg class="ic"><use href="#i-download"/></svg>
-    <span class="t"><b id="upd-top-title">Update available</b><small>Tap to see what's new</small></span>
-    <svg class="ic go"><use href="#i-chevron"/></svg>
-  </button>
-
   <section id="view-home" class="home" aria-labelledby="home-title">
     <div class="home-intro">
       <p class="eyebrow">A LITTLE LESS CLUTTER</p>
@@ -96,6 +92,7 @@
       </div>
       <button class="menu-btn" id="m-batch" type="button"><span class="mi"><svg class="ic"><use href="#i-layers"/></svg></span><span class="mt"><b>Work in batches</b><small id="m-batch-sub">One workflow. Multiple PDFs.</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
       <button class="menu-btn" id="m-settings" type="button"><span class="mi"><svg class="ic"><use href="#i-sliders"/></svg></span><span class="mt"><b>Make it yours</b><small>Appearance, updates &amp; about</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      <button class="menu-btn" id="upd-top" type="button" hidden><span class="mi"><svg class="ic"><use href="#i-download"/></svg></span><span class="mt"><b id="upd-top-title">Update available</b><small>Download the latest version</small></span><svg class="ic go"><use href="#i-chevron"/></svg></button>
     </nav>
     <div class="home-note"><svg class="ic"><use href="#i-shield"/></svg><p><strong>Your files stay yours.</strong><span>PDF processing happens on this device.</span></p></div>
   </section>
@@ -131,7 +128,7 @@
         <div class="sel-bar" id="selbar" hidden role="toolbar" aria-label="Text selection">
           <button id="sel-copy" type="button">Copy</button><button id="sel-line" type="button">Line</button><button id="sel-all" type="button">All</button><button id="sel-done" type="button">Done</button>
         </div>
-        <button class="bubble" id="bubble" type="button" aria-label="Cleaning options; drag to reposition" title="Tap for cleaning options. Drag to move this button."><svg class="ic"><use href="#i-eraser"/></svg><svg class="art art-eraser" viewBox="0 0 72 56" aria-hidden="true"><defs><clipPath id="eb-clip"><rect x="6" y="14" width="60" height="28" rx="7"/></clipPath></defs><g transform="rotate(-22 36 28)"><rect x="6" y="17" width="60" height="28" rx="7" fill="#000" opacity=".15"/><g clip-path="url(#eb-clip)"><rect x="6" y="14" width="60" height="28" fill="#f06a98"/><rect x="6" y="34" width="60" height="8" fill="#d8467c"/><rect x="38" y="14" width="30" height="28" fill="#2f5fd0"/><rect x="38" y="14" width="30" height="8" fill="#4b7be8"/><rect x="36" y="14" width="3" height="28" fill="#fff"/><rect x="50" y="14" width="2" height="28" fill="#fff" opacity=".7"/></g><rect x="6" y="14" width="60" height="28" rx="7" fill="none" stroke="#2b2b33" stroke-opacity=".35" stroke-width="1.5"/><path d="M12 20h18" stroke="#fff" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/></g><circle cx="12" cy="50" r="2" fill="#e0457b"/><circle cx="20" cy="53" r="1.5" fill="#6b7280"/><circle cx="5" cy="46" r="1.5" fill="#6b7280"/></svg><img class="art art-sponge" src="icons/tool-soap.png" alt="" aria-hidden="true" draggable="false"></button>
+        <button class="bubble" id="bubble" type="button" aria-label="Cleaning options; drag to reposition" title="Tap for cleaning options. Drag to move this button."><svg class="ic"><use href="#i-eraser"/></svg><img class="art art-eraser" src="icons/tool-eraser.png" alt="" aria-hidden="true" draggable="false"><img class="art art-sponge" src="icons/tool-soap.png" alt="" aria-hidden="true" draggable="false"></button>
       </section>
     </div>
 
@@ -163,6 +160,11 @@
   <section id="view-settings" hidden>
     <div class="settings">
       <div class="settings-intro"><p class="eyebrow">YOUR WORKSPACE, YOUR WAY</p><p>A comfortable look. Clear controls.<br>Everything in its place.</p></div>
+      <section class="card" aria-labelledby="h-forget">
+        <div class="card-head"><h2 id="h-forget">Saved PDF passwords</h2></div>
+        <p class="hint">Forget the saved unlocked copies on this device. You’ll need each PDF’s password to open it again.</p>
+        <button class="row-btn" id="uc-clear" type="button" disabled><svg class="ic"><use href="#i-trash"/></svg><span id="uc-label">Forget PDF passwords</span></button>
+      </section>
       <section class="card" aria-labelledby="h-theme">
         <div class="card-head"><h2 id="h-theme">Appearance</h2><span class="section-tag">PERSONALIZE</span></div>
         <div class="theme-list" id="theme-list" role="radiogroup" aria-label="Theme"></div>
@@ -170,29 +172,21 @@
         <div class="accent-list" id="accent-list" role="radiogroup" aria-label="Accent color"></div>
       </section>
 
-      <section class="card" aria-label="Performance">
-        <div class="switches"><label class="switch"><input type="checkbox" id="opt-lite"><span class="track"></span><span class="txt"><b>Lighter visuals</b><small>Less blur and motion. Helps slower devices.</small></span></label></div>
+      <section class="card" aria-labelledby="h-lite">
+        <div class="card-head"><h2 id="h-lite">Lighter visuals</h2></div>
+        <div class="switches"><label class="switch"><input type="checkbox" id="opt-lite"><span class="track"></span><span class="txt"><b>Reduce visual effects</b><small>Less blur and motion. Helps slower devices.</small></span></label></div>
       </section>
 
-        <section class="card" id="card-update" aria-labelledby="h-upd" hidden>
+      <section class="card" id="card-update" aria-labelledby="h-upd" hidden>
         <div class="card-head"><h2 id="h-upd">App updates</h2><span class="ver" id="app-ver"></span></div>
         <p class="hint" id="upd-status">Check for a newer version.</p>
         <div class="upd-actions">
           <button class="btn ghost" id="upd-check" type="button"><svg class="ic"><use href="#i-reset"/></svg><span id="upd-check-label">Check for updates</span></button>
           <button class="btn primary" id="upd-get" type="button" hidden><svg class="ic"><use href="#i-download"/></svg><span id="upd-get-label">Update available</span></button>
         </div>
-        <p class="hint upd-notes" id="upd-notes" hidden></p>
-        <div class="switches"><label class="switch"><input type="checkbox" id="opt-autoupd"><span class="track"></span><span class="txt"><b>Check automatically</b><small>Once a day. Off by default.</small></span></label></div>
         <p class="hint">Only the update check uses the internet. It sends none of your files or data.</p>
       </section>
 
-      <button class="row-btn" id="uc-clear" type="button"><svg class="ic"><use href="#i-trash"/></svg><span id="uc-label">Forget unlocked PDFs</span></button>
-
-      <section class="card responsible-card" aria-labelledby="h-responsible">
-        <div class="card-head"><h2 id="h-responsible">Responsible use</h2></div>
-        <p class="hint">Only edit documents you own or have permission to change. Review your exported copy before using or sharing it.</p>
-      <button class="row-btn" id="open-disclaimer" type="button"><svg class="ic"><use href="#i-alert"/></svg><span>Read the disclaimer</span><svg class="ic go"><use href="#i-chevron"/></svg></button>
-      </section>
       <section class="card credits-card" id="credits" aria-labelledby="h-credits">
         <div class="card-head"><h2 id="h-credits">Credits</h2><span class="section-tag">DEPDF</span></div>
         <p class="developer-credit">Created by <strong>DePDF developer</strong></p>
@@ -206,6 +200,11 @@
       </section>
 
       <div class="reset-row"><button class="btn ghost sm" id="reset-btn" type="button"><svg class="ic"><use href="#i-reset"/></svg><span>Reset settings</span></button></div>
+      <section class="card responsible-card" aria-labelledby="h-responsible">
+        <div class="card-head"><h2 id="h-responsible">Responsible use</h2></div>
+        <p class="hint">Only edit documents you own or have permission to change. Review your exported copy before using or sharing it.</p>
+      <button class="row-btn" id="open-disclaimer" type="button"><svg class="ic"><use href="#i-alert"/></svg><span>Read the disclaimer</span><svg class="ic go"><use href="#i-chevron"/></svg></button>
+      </section>
     </div>
   </section>
 </div>
@@ -413,6 +412,7 @@
   <div class="modal-card">
     <h2 id="mc-title"></h2>
     <p id="mc-text"></p>
+    <ul id="mc-list" class="confirm-files" hidden></ul>
     <div class="modal-actions"><button class="btn ghost" id="mc-cancel" type="button">Cancel</button><button class="btn primary" id="mc-ok" type="button">Continue</button></div>
   </div>
 </div>
