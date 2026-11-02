@@ -118,9 +118,8 @@ jobs:
             ./gradlew assembleRelease "${ARGS[@]}"
             SRC=app/build/outputs/apk/release/app-release.apk
           else
-            echo "No signing key set: building a debug-signed APK."
-            ./gradlew assembleDebug "${ARGS[@]}"
-            SRC=app/build/outputs/apk/debug/app-debug.apk
+            echo "Release signing is required to publish an APK." >&2
+            exit 1
           fi
           mkdir -p dist
           cp "$SRC" "dist/DePDF-$APP_VERSION.apk"
