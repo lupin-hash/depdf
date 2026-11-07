@@ -1267,8 +1267,8 @@
     if (!$(".modal:not([hidden])")) document.body.classList.remove("modal-open");
   }
   $$(".modal").forEach((m) => m.addEventListener("click", (e) => {
-    if (m.dataset.gate) return;
     if (Date.now() - (m._t || 0) < 350) return;
+    if (m.dataset.gate) { const b = e.target.closest("[data-close]"); if (b && !b.disabled) closeModal(m); return; }
     if (e.target === m || e.target.closest("[data-close]")) closeModal(m);
   }));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const m = $(".modal:not([hidden])"); if (m && !m.dataset.gate) closeModal(m); } });
@@ -1280,19 +1280,22 @@
     let seen = false;
     try { seen = localStorage.getItem(DISC_KEY) === "1"; } catch (e) { /* storage unavailable: show every time */ }
     if (seen) return;
+    const WAIT = 5;
     const m = $("#modal-disclaimer"), card = m.querySelector(".modal-card"), ok = $("#md-ok"), hint = $("#md-hint");
-    m.dataset.gate = "1"; ok.disabled = true; hint.hidden = false;
-    const atEnd = () => card.scrollTop + card.clientHeight >= card.scrollHeight - 6;
-    const check = () => { if (atEnd()) { ok.disabled = false; hint.hidden = true; } };
-    card.addEventListener("scroll", check, { passive: true });
-    window.addEventListener("resize", check);
+    let timer = 0, left = WAIT;
+    const label = () => "Please wait " + left + " second" + (left === 1 ? "" : "s") + "…";
+    m.dataset.gate = "1"; ok.disabled = true; hint.hidden = false; hint.textContent = label();
+    timer = setInterval(() => {
+      left -= 1;
+      if (left > 0) { hint.textContent = label(); return; }
+      clearInterval(timer); ok.disabled = false; hint.hidden = true;
+    }, 1000);
     m.addEventListener("modalclose", function done() {
-      m.removeEventListener("modalclose", done); delete m.dataset.gate; ok.disabled = false; hint.hidden = true;
-      card.removeEventListener("scroll", check); window.removeEventListener("resize", check);
+      m.removeEventListener("modalclose", done); clearInterval(timer);
+      delete m.dataset.gate; ok.disabled = false; hint.hidden = true;
       try { localStorage.setItem(DISC_KEY, "1"); } catch (e) { /* ignore */ }
     });
     openModal("modal-disclaimer"); card.scrollTop = 0;
-    setTimeout(check, 50);
   }
   showFirstRunDisclaimer();
 
