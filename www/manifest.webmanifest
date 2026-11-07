@@ -1,7 +1,7 @@
 {
   "name": "DePDF",
   "short_name": "DePDF",
-  "description": "Review, clean and unlock your PDFs privately on your device.",
+  "description": "Organize, review and extract what matters from your PDFs privately on your device.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

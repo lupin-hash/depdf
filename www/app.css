@@ -680,3 +680,7 @@ html.lite #boot-bar, html.lite .boot-eraser { transition: none; }
 }
 
 .bubble img.art-eraser { object-fit: contain; }
+
+/* First-launch disclaimer gate */
+#modal-disclaimer .gate-hint { text-align: center; font-weight: 600; }
+#modal-disclaimer .gate-hint[hidden] { display: none; }

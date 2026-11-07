@@ -1267,11 +1267,34 @@
     if (!$(".modal:not([hidden])")) document.body.classList.remove("modal-open");
   }
   $$(".modal").forEach((m) => m.addEventListener("click", (e) => {
+    if (m.dataset.gate) return;
     if (Date.now() - (m._t || 0) < 350) return;
     if (e.target === m || e.target.closest("[data-close]")) closeModal(m);
   }));
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const m = $(".modal:not([hidden])"); if (m) closeModal(m); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const m = $(".modal:not([hidden])"); if (m && !m.dataset.gate) closeModal(m); } });
   $("#open-disclaimer").addEventListener("click", () => openModal("modal-disclaimer"));
+
+  /* First launch: the disclaimer must be scrolled to the end before "I understand" unlocks. */
+  const DISC_KEY = "pdfcleaner.disclaimer.v1";
+  function showFirstRunDisclaimer() {
+    let seen = false;
+    try { seen = localStorage.getItem(DISC_KEY) === "1"; } catch (e) { /* storage unavailable: show every time */ }
+    if (seen) return;
+    const m = $("#modal-disclaimer"), card = m.querySelector(".modal-card"), ok = $("#md-ok"), hint = $("#md-hint");
+    m.dataset.gate = "1"; ok.disabled = true; hint.hidden = false;
+    const atEnd = () => card.scrollTop + card.clientHeight >= card.scrollHeight - 6;
+    const check = () => { if (atEnd()) { ok.disabled = false; hint.hidden = true; } };
+    card.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    m.addEventListener("modalclose", function done() {
+      m.removeEventListener("modalclose", done); delete m.dataset.gate; ok.disabled = false; hint.hidden = true;
+      card.removeEventListener("scroll", check); window.removeEventListener("resize", check);
+      try { localStorage.setItem(DISC_KEY, "1"); } catch (e) { /* ignore */ }
+    });
+    openModal("modal-disclaimer"); card.scrollTop = 0;
+    setTimeout(check, 50);
+  }
+  showFirstRunDisclaimer();
 
 
   /* ------------------------------------------------------------------ *
