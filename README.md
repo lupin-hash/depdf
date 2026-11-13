@@ -40,7 +40,7 @@ Pinch to zoom, drag to pan, or double-tap to toggle zoom. On a computer, use Ctr
 
 Use the visible left/right page buttons to change pages (or desktop arrow keys). Swiping does not change pages; pinch zoom and panning remain available.
 
-Press and hold text to select it, extend the selection with its handles, then tap **Copy**. Dragging the floating eraser or soap only repositions the options button; tapping it opens cleaning options. It does not select text or change the clipboard. Text copying requires an existing selectable text layer; this does not add OCR to scanned images.
+Press and hold text to select it, extend the selection with its handles, then tap **Copy**. Dragging the floating eraser or sponge only repositions the options button; tapping it opens cleaning options. It does not select text or change the clipboard. Text copying requires an existing selectable text layer; this does not add OCR to scanned images.
 
 ## Exported PDF history
 
