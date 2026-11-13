@@ -956,7 +956,16 @@
    * ------------------------------------------------------------------ */
   const SUFFIX = { clean: "_clean", unlock: "_unlocked", batch: "_clean" };
   const nameCtx = { kind: "clean" };
-  const previewName = () => safeName(stemOf((nameCtx.kind === "batch" ? (batch.items[0] || {}).name : state.file.name) || "file") + ($("#nm-suffix").value.trim() || SUFFIX[nameCtx.kind]) + ".pdf");
+  /* "Remove from name": comma-separated parts, each deleted everywhere in the original name (case-insensitive). */
+  const removeParts = (raw) => [...new Set(String(raw || "").split(",").map((p) => p.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+  const stripParts = (stem, raw) => {
+    let out = stem;
+    for (const part of removeParts(raw)) out = out.replace(new RegExp(part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
+    out = out.trim();
+    return out || stem;   // never leave an empty file name
+  };
+  const nameFor = (fileName, suffix, remove) => safeName(stripParts(stemOf(fileName || "file"), remove) + (suffix || "") + ".pdf");
+  const previewName = () => nameFor(nameCtx.kind === "batch" ? (batch.items[0] || {}).name : state.file.name, $("#nm-suffix").value.trim() || SUFFIX[nameCtx.kind], $("#nm-remove").value);
 
   function pickFolder() {
     if (!NATIVE || typeof NATIVE.pickFolder !== "function") return Promise.resolve("Downloads");
@@ -974,17 +983,18 @@
     try { if (kind !== "batch") requireInput(); if (kind !== "unlock") getOptions(); } catch (e) { toast(e.message, true); return; }
     nameCtx.kind = kind;
     $("#nm-suffix").value = SUFFIX[kind];
+    $("#nm-remove").value = "";
     $("#nm-preview").textContent = previewName();
     $("#mn-title").textContent = kind === "unlock" ? "Name the unlocked copy" : kind === "batch" ? "Name your cleaned copies" : "Name your cleaned copy";
     openModal("modal-name");
   }
-  $("#nm-suffix").addEventListener("input", () => { $("#nm-preview").textContent = previewName(); });
+  ["#nm-suffix", "#nm-remove"].forEach((s) => $(s).addEventListener("input", () => { $("#nm-preview").textContent = previewName(); }));
   $("#nm-save").addEventListener("click", async () => {
     const name = previewName(), kind = nameCtx.kind;
     closeModal($("#modal-name"));
     const folder = await pickFolder();
     if (!folder) { toast("Choose a folder to save."); openModal("modal-name"); return; }
-    if (kind === "batch") await runBatch($("#nm-suffix").value.trim() || SUFFIX.batch, folder);
+    if (kind === "batch") await runBatch($("#nm-suffix").value.trim() || SUFFIX.batch, folder, $("#nm-remove").value);
     else await runSave(kind, name, folder);
   });
 
@@ -1182,7 +1192,7 @@
     { id: "midnight", name: "Midnight", sw: "linear-gradient(#000,#0b0b10)" },
     { id: "sepia", name: "Sepia", sw: "linear-gradient(#f3ead7,#fbf5e8)" },
     { id: "eraser", name: "Eraser", sw: "linear-gradient(115deg,#fbeee9 55%,#e0457b 55%)" },
-    { id: "soap", name: "Soap", sw: "radial-gradient(circle at 32% 38%,#fff 0 16%,#bfeaf0 17% 22%,transparent 23%),linear-gradient(#eefaf8,#cdeae6)" },
+    { id: "soap", name: "Sponge", sw: "radial-gradient(circle at 32% 38%,#fff 0 16%,#bfeaf0 17% 22%,transparent 23%),linear-gradient(#eefaf8,#cdeae6)" },
   ];
   /* [name, accent (text/outline), gradient start, gradient end] */
   const ACCENTS = {
@@ -1838,6 +1848,12 @@
     if (el.imgWm.checked || el.xrefs.value.trim()) out.push("Image watermarks");
     return out;
   }
+  function parseMatch(line) {
+    const m = line.match(/^(['"])(.*)\1 \[(.*?)\]: (\d+) text match/);
+    if (!m) return { text: line, count: null };
+    return { phrase: m[2], where: /^Header/.test(m[3]) ? "Header text" : /^Footer/.test(m[3]) ? "Footer text" : "Watermark text", count: Number(m[4]) };
+  }
+  const matchLine = (m) => m.count == null ? m.text : m.where + " \u201c" + m.phrase + "\u201d: " + (m.count ? m.count + (m.count === 1 ? " place found" : " places found") : "not found");
   function parseReport(text) {
     const num = (re) => { const m = text.match(re); return m ? Number(m[1].replace(/,/g, "")) : null; };
     const mfields = num(/^Standard metadata fields with values:\s*(\d+)/m);
@@ -1846,18 +1862,67 @@
       pages: num(/^Pages:\s*(\d+)/m), chars: num(/^Selectable text characters:\s*([\d,]+)/m), annots: num(/^Annotations\/stamps:\s*(\d+)/m),
       links: num(/^Hyperlinks:\s*(\d+)/m), atts: num(/^Embedded attachments:\s*(\d+)/m), hidden: num(/^Hidden\/tracker text spans:\s*(\d+)/m),
       hasMeta: /^XMP metadata:\s*(found|present)/im.test(text) || mfields > 0, images: (text.match(/^\s*XRef \d+:/gm) || []).length,
-      matches: phrase ? phrase[1].split("\n").map((l) => l.trim().replace(/^[•*-]\s*/, "")).filter(Boolean) : [],
+      matches: phrase ? phrase[1].split("\n").map((l) => l.trim().replace(/^[\u2022*-]\s*/, "")).filter(Boolean).map(parseMatch) : [],
     };
+  }
+  /* Plain-language report: what was found, what will be removed, what will be kept. */
+  function readableReport(name, r, d, raw) {
+    d = d || {};
+    const n = (k) => (d[k] && d[k].enabled) === true;
+    const plural = (c, one, many) => c + " " + (c === 1 ? one : many || one + "s");
+    const text = d.text || { items: [], total: 0 }, imgs = (d.images && d.images.items) || [], imgOut = imgs.filter((i) => i.will_remove);
+    const hid = {};
+    ((d.hidden && d.hidden.items) || []).forEach((i) => { hid[i.reason] = (hid[i.reason] || 0) + 1; });
+    const hidWhy = Object.entries(hid).map(([k, v]) => v + " " + k.toLowerCase()).join(", ");
+    const L = ["FILE: " + name];
+    if (r.pages != null) L.push("Pages: " + r.pages);
+    L.push("", "WHAT WAS FOUND");
+    L.push("\u2022 Selectable text: " + (r.chars === 0 ? "none. This looks like a scanned (picture-only) PDF; cleaning will not make it searchable." : r.chars == null ? "unknown" : r.chars.toLocaleString() + " characters"));
+    L.push("\u2022 Notes, comments and stamps: " + (r.annots || 0));
+    L.push("\u2022 Clickable links: " + (r.links || 0));
+    L.push("\u2022 Files attached inside the PDF: " + (r.atts || 0));
+    L.push("\u2022 Document properties (title, author, software used): " + (r.hasMeta ? "found" : "none"));
+    L.push("\u2022 Hidden or tracker text: " + (r.hidden ? r.hidden + (hidWhy ? " (" + hidWhy + ")" : "") : "none"));
+    if (d.images) L.push("\u2022 Images: " + imgs.length);
+    (r.matches || []).forEach((m) => L.push("\u2022 " + matchLine(m)));
+    L.push("", "WHAT WILL BE REMOVED");
+    const out = ["Saved file history, private editing records, old thumbnails and document scripts (always)"];
+    if (r.hasMeta) out.push("Document properties (always)");
+    if (r.atts) out.push(plural(r.atts, "attached file") + " inside the PDF (always)");
+    if (r.annots && n("annotations")) out.push(plural(r.annots, "note, comment or stamp"));
+    if (r.links && n("links")) out.push(plural(r.links, "clickable link") + " (the printed words stay)");
+    if (r.hidden && n("hidden")) out.push("Hidden or tracker text" + (d.hidden.ocr_kept ? " (searchable text layers on scanned pages are kept)" : ""));
+    if (text.total) out.push(plural(text.total, "word") + " of page text on " + plural(text.items.length, "page") + " (selected headers, footers, watermarks or areas)");
+    if (imgOut.length) out.push(plural(imgOut.length, "image") + ": " + imgOut.map((i) => i.text.replace(/^Image /, "#")).join(", "));
+    out.forEach((x) => L.push("\u2022 " + x));
+    L.push("", "WHAT WILL BE KEPT");
+    const keep = ["All pages (cleaning never deletes pages)", "Everything on the pages that is not listed above"];
+    if (r.annots && !n("annotations")) keep.push(plural(r.annots, "note, comment or stamp") + " (removal is off)");
+    if (r.links && !n("links")) keep.push(plural(r.links, "clickable link") + " (removal is off)");
+    if (r.hidden && !n("hidden")) keep.push("Hidden or tracker text, " + r.hidden + " found (removal is off)");
+    if (imgs.length - imgOut.length > 0) keep.push(plural(imgs.length - imgOut.length, "other image"));
+    if (text.protected_matches) keep.push(plural(text.protected_matches, "matching spot") + " left alone to protect nearby visible content");
+    if (d.hidden && d.hidden.ocr_kept) keep.push(plural(d.hidden.ocr_kept, "invisible search-layer section") + " on scanned pages");
+    keep.forEach((x) => L.push("\u2022 " + x));
+    if (d.images && d.images.unavailable) L.push("", "Note: " + plural(d.images.unavailable, "requested image") + " could not be removed.");
+    if (text.total) {
+      L.push("", "TEXT THAT WILL BE REMOVED");
+      text.items.slice(0, 10).forEach((i) => { const t = String(i.text || "").replace(/\s+/g, " ").trim(); L.push("Page " + i.page + ": \u201c" + (t.length > 100 ? t.slice(0, 100) + "\u2026" : t) + "\u201d"); });
+      if (text.items.length > 10) L.push("\u2026and " + (text.items.length - 10) + " more pages (tap Text to remove for the full list)");
+    }
+    L.push("", "Your original PDF is never changed. Only the new cleaned copy is edited.");
+    if (raw) L.push("", "TECHNICAL DETAILS", String(raw).trim());
+    return L.join("\n");
   }
   function showAnalysis(tiles, sub, lines, report, cleanLabel, sources) {
     analysisSources = sources; closeAnalysisDetail(false);
     const grid = $("#an-grid"); grid.textContent = "";
-    tiles.forEach(([label, value, tone]) => {
+    tiles.forEach(([label, value, tone, status]) => {
       const t = document.createElement("button"); t.type = "button"; t.className = "an-tile" + (tone ? " " + tone : "");
       const b = document.createElement("b"); b.textContent = String(value);
       const sp = document.createElement("span"); sp.textContent = label;
       const key = analysisKey(label);
-      const hint = document.createElement("small"); hint.textContent = "Tap for details";
+      const hint = document.createElement("small"); hint.textContent = status || "Tap for details";
       t.setAttribute("aria-controls", "an-detail"); t.setAttribute("aria-expanded", "false");
       t.addEventListener("click", () => openAnalysisDetail(key, t));
       t.append(b, sp, hint); grid.append(t);
@@ -1877,16 +1942,24 @@
     writeReport(report);
   }
   function renderAnalysis(text, details) {
-    const r = parseReport(text);
+    const r = parseReport(text), d = details || {};
+    const on = (k) => !!(d[k] && d[k].enabled);
+    const act = (count, enabled) => (!count ? "None found" : enabled ? "Will remove" : "Will keep");
+    const tone = (count, enabled) => (!count ? "ok" : enabled ? "warn" : "");
+    const words = d.text ? d.text.total : null, imgTotal = d.images ? d.images.total : r.images;
+    const imgOut = d.images ? d.images.items.filter((i) => i.will_remove).length : 0;
     showAnalysis([
-      ["Pages", r.pages == null ? "?" : r.pages, ""],
-      ["File history", "Will clear", "ok"],
-      ["Text to remove", details?.text ? details.text.total + " words" : "?", details?.text.total ? "warn" : "ok"],
-      ["Text characters", r.chars === 0 ? "None" : r.chars == null ? "?" : r.chars.toLocaleString(), r.chars === 0 ? "warn" : ""],
-      ["Annotations", r.annots || 0, r.annots ? "warn" : "ok"], ["Links", r.links || 0, r.links ? "warn" : "ok"],
-      ["Attachments", r.atts || 0, r.atts ? "warn" : "ok"], ["Metadata", r.hasMeta ? "Found" : "None", r.hasMeta ? "warn" : "ok"],
-      ["Hidden text", r.hidden || 0, r.hidden ? "warn" : "ok"], ["Images", details?.images.total ?? r.images, ""],
-    ], state.file ? state.file.name + (r.pages ? " · " + r.pages + " pages" : "") : "", r.matches, text, "Clean PDF", [{ name: state.file?.name || "PDF", details }]);
+      ["Pages", r.pages == null ? "?" : r.pages, "", "All kept"],
+      ["File history", "Will clear", "ok", "Always removed"],
+      ["Text to remove", words == null ? "?" : words + " words", words ? "warn" : "ok", !on("text") ? "None selected" : words ? "Will remove" : "Nothing matched"],
+      ["Text characters", r.chars === 0 ? "None" : r.chars == null ? "?" : r.chars.toLocaleString(), r.chars === 0 ? "warn" : "", r.chars === 0 ? "Looks scanned" : "Info only"],
+      ["Annotations", r.annots || 0, tone(r.annots, on("annotations")), act(r.annots, on("annotations"))],
+      ["Links", r.links || 0, tone(r.links, on("links")), act(r.links, on("links"))],
+      ["Attachments", r.atts || 0, tone(r.atts, true), act(r.atts, true)],
+      ["Metadata", r.hasMeta ? "Found" : "None", r.hasMeta ? "warn" : "ok", act(r.hasMeta, true)],
+      ["Hidden text", r.hidden || 0, tone(r.hidden, on("hidden")), act(r.hidden, on("hidden"))],
+      ["Images", imgTotal ? imgOut + " of " + imgTotal : "None", imgOut ? "warn" : "", imgOut ? "Will remove " + imgOut : imgTotal ? "All kept" : "None found"],
+    ], state.file ? state.file.name + (r.pages ? " \u00b7 " + r.pages + (r.pages === 1 ? " page" : " pages") : "") : "", r.matches.map(matchLine), readableReport(state.file ? state.file.name : "PDF", r, details, text), "Clean PDF", [{ name: state.file?.name || "PDF", details }]);
   }
   /* batch: totals for every PDF, plus one line per PDF that has something to clean */
   function renderBatchAnalysis(results) {
@@ -1899,18 +1972,25 @@
       const f = [];
       if (r.links) f.push(r.links + " links"); if (r.annots) f.push(r.annots + " annotations"); if (r.atts) f.push(r.atts + " attachments");
       if (r.hidden) f.push(r.hidden + " hidden text"); if (r.hasMeta) f.push("metadata"); if (r.chars === 0) f.push("no selectable text");
-      r.matches.forEach((m) => { if (!/:\s*0 text match/.test(m)) f.push(m); });
+      r.matches.forEach((m) => { if (m.count !== 0) f.push(matchLine(m)); });
       if (f.length) lines.push("#" + n + " " + it.name + ": " + f.join(", "));
     });
+    const mode = (k) => { const v = parts.map((p) => !!(p.details && p.details[k] && p.details[k].enabled)); return v.every(Boolean) ? "on" : v.some(Boolean) ? "mixed" : "off"; };
+    const act = (count, m) => (!count ? "None found" : m === "on" ? "Will remove" : m === "off" ? "Will keep" : "Varies by PDF");
+    const tone = (count, m) => (!count ? "ok" : m === "on" ? "warn" : "");
+    const words = parts.reduce((n, p) => n + (p.details?.text.total || 0), 0), tm = mode("text");
     showAnalysis([
-      ["PDFs", parts.length, ""], ["Pages", pages, ""],
-      ["File history", "Will clear", "ok"],
-      ["Text to remove", parts.reduce((n, p) => n + (p.details?.text.total || 0), 0) + " words", ""],
-      ["Text characters", chars === 0 ? "None" : chars.toLocaleString(), chars === 0 ? "warn" : ""],
-      ["Annotations", annots, annots ? "warn" : "ok"], ["Links", links, links ? "warn" : "ok"], ["Attachments", atts, atts ? "warn" : "ok"],
-      ["Metadata", withMeta ? withMeta + " of " + parts.length : "None", withMeta ? "warn" : "ok"], ["Hidden text", hidden, hidden ? "warn" : "ok"],
-    ], parts.length + (parts.length > 1 ? " PDFs · " : " PDF · ") + pages + " pages", lines,
-      parts.map((p) => "=== #" + p.n + " " + p.it.name + " ===\n" + p.report).join("\n"), "Clean all PDFs", parts.map(p => ({ name: p.it.name, details: p.details })));
+      ["PDFs", parts.length, "", "All checked"], ["Pages", pages, "", "All kept"],
+      ["File history", "Will clear", "ok", "Always removed"],
+      ["Text to remove", words + " words", words ? "warn" : "ok", tm === "off" ? "None selected" : words ? (tm === "mixed" ? "Varies by PDF" : "Will remove") : "Nothing matched"],
+      ["Text characters", chars === 0 ? "None" : chars.toLocaleString(), chars === 0 ? "warn" : "", chars === 0 ? "Looks scanned" : "Info only"],
+      ["Annotations", annots, tone(annots, mode("annotations")), act(annots, mode("annotations"))],
+      ["Links", links, tone(links, mode("links")), act(links, mode("links"))],
+      ["Attachments", atts, tone(atts, "on"), act(atts, "on")],
+      ["Metadata", withMeta ? withMeta + " of " + parts.length : "None", withMeta ? "warn" : "ok", act(withMeta, "on")],
+      ["Hidden text", hidden, tone(hidden, mode("hidden")), act(hidden, mode("hidden"))],
+    ], parts.length + (parts.length > 1 ? " PDFs \u00b7 " : " PDF \u00b7 ") + pages + " pages", lines,
+      parts.map((p) => readableReport("#" + p.n + " " + p.it.name, p.r, p.details, p.report)).join("\n\n\n"), "Clean all PDFs", parts.map(p => ({ name: p.it.name, details: p.details })));
     lastXrefs = []; renderXrefChips();
   }
 
@@ -2195,7 +2275,7 @@
     setBusy(false, "Analysis complete");
     openModal("modal-analysis");
   }
-  async function runBatch(suffix, folder) {
+  async function runBatch(suffix, folder, remove) {
     const snap = snapOptions(), targets = batch.items.filter((it) => !isLocked(it));
     if (!targets.length) { toast("No unlocked PDFs to clean.", true); return; }
     state.itemMode = true; state.globalSnap = snap;
@@ -2213,7 +2293,7 @@
         await ensureItem(it);
         applyOptions(it.opts || snap);
         const opts = getOptions();
-        const outName = uniqueName(used, safeName(stemOf(it.name) + suffix + ".pdf"));
+        const outName = uniqueName(used, nameFor(it.name, suffix, remove));
         const outP = "/out/batch/" + it.id + "/" + outName;
         await rpc("job", { job: { kind: "clean", input: it.work, output: outP, password: "", options: opts } });
         const got = await rpc("get", { path: outP });

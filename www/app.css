@@ -378,10 +378,10 @@ body.viewer-open { overflow: hidden; }
 #busy-cancel[hidden] { display: none; }
 #modal-confirm { z-index: 80; }
 
-/* ---- Themes: Eraser and Soap ---- */
+/* ---- Themes: Eraser and Sponge (internal theme id stays "soap" so saved choices keep working) ---- */
 :root[data-theme="eraser"] { --bg: #fbeee9; --surface: #fffaf7; --surface-2: #f8e3dc; --ink: #2b2b33; --muted: #7d6a6a; --line: #eccfc8; --shadow: 0 1px 2px rgba(120, 60, 60, .06), 0 8px 24px -12px rgba(120, 60, 60, .22); --radius: 18px; }
 :root[data-theme="soap"] { --bg: #eefaf8; --surface: #ffffff; --surface-2: #e3f5f2; --ink: #15393a; --muted: #5f8587; --line: #cdeae6; --shadow: 0 1px 2px rgba(20, 110, 120, .06), 0 8px 24px -12px rgba(20, 110, 120, .22); --radius: 26px; }
-/* ---- Eraser / Soap: real icon instead of the round button ---- */
+/* ---- Eraser / Sponge: real icon instead of the round button ---- */
 .bubble .art { display: none; width: 100%; height: 100%; transition: transform .12s; }
 :root[data-theme="eraser"] .bubble, :root[data-theme="soap"] .bubble { width: 78px; height: 60px; border: 0; border-radius: 0; background: none; box-shadow: none; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, .3)); }
 :root[data-theme="eraser"] .bubble .ic, :root[data-theme="soap"] .bubble .ic { display: none; }

@@ -260,7 +260,7 @@
   <div class="modal-card wide">
     <div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="ma-title">Analysis</h2></div>
     <p class="an-sub" id="an-sub"></p>
-    <p class="an-hint">Tap a summary box to see what was found and what your settings would remove. Analyze again after changing settings.</p>
+    <p class="an-hint">Each box shows what was found and whether it will be removed or kept. Tap a box for details. Analyze again after changing settings.</p>
     <div class="an-grid" id="an-grid"></div>
     <section class="an-detail" id="an-detail" aria-labelledby="an-detail-title" hidden>
       <div class="an-detail-head"><h3 id="an-detail-title" tabindex="-1"></h3><button class="btn ghost sm" id="an-detail-close" type="button">Close details</button></div>
@@ -270,7 +270,7 @@
       <button class="btn ghost sm" id="an-detail-more" type="button" hidden>Show more</button>
     </section>
     <ul class="an-list" id="an-matches" hidden></ul>
-    <p class="an-label">Selected cleanup settings — tap for details</p>
+    <p class="an-label">Cleanup that will be applied — tap for details</p>
     <div class="an-chiprow" id="an-plan"></div>
     <div id="an-chips-slot"></div>
     <details class="an-details">
@@ -312,6 +312,11 @@
       <label for="nm-suffix">Add to name</label>
       <input id="nm-suffix" type="text" value="_clean" autocomplete="off" autocapitalize="off" spellcheck="false">
     </div>
+    <div class="field">
+      <label for="nm-remove">Remove from name</label>
+      <input id="nm-remove" type="text" value="" placeholder="e.g. _,123,abc" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <p class="hint">Separate parts with commas. Every match in the original name is deleted.</p>
     <p class="hint">Saves as <b id="nm-preview"></b></p>
     <div class="modal-actions">
       <button class="btn ghost" type="button" data-close>Cancel</button>
