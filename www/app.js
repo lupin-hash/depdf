@@ -964,8 +964,20 @@
     out = out.trim();
     return out || stem;   // never leave an empty file name
   };
-  const nameFor = (fileName, suffix, remove) => safeName(stripParts(stemOf(fileName || "file"), remove) + (suffix || "") + ".pdf");
-  const previewName = () => nameFor(nameCtx.kind === "batch" ? (batch.items[0] || {}).name : state.file.name, $("#nm-suffix").value.trim() || SUFFIX[nameCtx.kind], $("#nm-remove").value);
+  /* "New file name": when filled in, it replaces the whole name (add/remove are ignored). A typed ".pdf" is not doubled. */
+  const fullStem = (raw) => String(raw || "").trim().replace(/\.pdf$/i, "").trim();
+  const nameFor = (fileName, suffix, remove, full) => {
+    const rename = fullStem(full);
+    if (rename) return safeName(rename + ".pdf");
+    return safeName(stripParts(stemOf(fileName || "file"), remove) + (suffix || "") + ".pdf");   // empty "Add to name" adds nothing
+  };
+  const previewName = () => nameFor(nameCtx.kind === "batch" ? (batch.items[0] || {}).name : state.file.name, $("#nm-suffix").value.trim(), $("#nm-remove").value, nameCtx.kind === "batch" ? "" : $("#nm-full").value);
+  /* Dim the add/remove fields while a full new name is typed, since they no longer apply. */
+  const syncNameFields = () => {
+    const full = nameCtx.kind !== "batch" && !!fullStem($("#nm-full").value);
+    ["#nm-suffix", "#nm-remove"].forEach((s) => { $(s).disabled = full; });
+    $("#nm-preview").textContent = previewName();
+  };
 
   function pickFolder() {
     if (!NATIVE || typeof NATIVE.pickFolder !== "function") return Promise.resolve("Downloads");
@@ -984,17 +996,19 @@
     nameCtx.kind = kind;
     $("#nm-suffix").value = SUFFIX[kind];
     $("#nm-remove").value = "";
-    $("#nm-preview").textContent = previewName();
+    $("#nm-full").value = "";
+    $("#nm-full-field").hidden = kind === "batch";   // one new name can't apply to many files
     $("#mn-title").textContent = kind === "unlock" ? "Name the unlocked copy" : kind === "batch" ? "Name your cleaned copies" : "Name your cleaned copy";
+    syncNameFields();
     openModal("modal-name");
   }
-  ["#nm-suffix", "#nm-remove"].forEach((s) => $(s).addEventListener("input", () => { $("#nm-preview").textContent = previewName(); }));
+  ["#nm-suffix", "#nm-remove", "#nm-full"].forEach((s) => $(s).addEventListener("input", syncNameFields));
   $("#nm-save").addEventListener("click", async () => {
     const name = previewName(), kind = nameCtx.kind;
     closeModal($("#modal-name"));
     const folder = await pickFolder();
     if (!folder) { toast("Choose a folder to save."); openModal("modal-name"); return; }
-    if (kind === "batch") await runBatch($("#nm-suffix").value.trim() || SUFFIX.batch, folder, $("#nm-remove").value);
+    if (kind === "batch") await runBatch($("#nm-suffix").value.trim(), folder, $("#nm-remove").value);
     else await runSave(kind, name, folder);
   });
 

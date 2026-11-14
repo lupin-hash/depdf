@@ -308,6 +308,10 @@
 <div class="modal" id="modal-name" role="dialog" aria-modal="true" aria-labelledby="mn-title" hidden>
   <div class="modal-card">
     <h2 id="mn-title">Name your copy</h2>
+    <div class="field" id="nm-full-field">
+      <label for="nm-full">New file name</label>
+      <input id="nm-full" type="text" value="" placeholder="Type a full new name (optional)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
     <div class="field">
       <label for="nm-suffix">Add to name</label>
       <input id="nm-suffix" type="text" value="_clean" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -316,7 +320,7 @@
       <label for="nm-remove">Remove from name</label>
       <input id="nm-remove" type="text" value="" placeholder="e.g. _,123,abc" autocomplete="off" autocapitalize="off" spellcheck="false">
     </div>
-    <p class="hint">Separate parts with commas. Every match in the original name is deleted.</p>
+    <p class="hint">A new file name replaces the whole name. Leave "Add to name" empty to add nothing. Separate removed parts with commas; every match is deleted.</p>
     <p class="hint">Saves as <b id="nm-preview"></b></p>
     <div class="modal-actions">
       <button class="btn ghost" type="button" data-close>Cancel</button>

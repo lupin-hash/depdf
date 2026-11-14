@@ -684,3 +684,6 @@ html.lite #boot-bar, html.lite .boot-eraser { transition: none; }
 /* First-launch disclaimer gate */
 #modal-disclaimer .gate-hint { text-align: center; font-weight: 600; }
 #modal-disclaimer .gate-hint[hidden] { display: none; }
+
+/* Name dialog: add/remove fields are dimmed while a full new name is typed */
+.field input:disabled { opacity: .45; cursor: not-allowed; }
