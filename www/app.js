@@ -1292,8 +1292,8 @@
   }
   $$(".modal").forEach((m) => m.addEventListener("click", (e) => {
     if (Date.now() - (m._t || 0) < 350) return;
-    if (m.dataset.gate) { const b = e.target.closest("[data-close]"); if (b && !b.disabled) closeModal(m); return; }
-    if (e.target === m || e.target.closest("[data-close]")) closeModal(m);
+    const closeButton = e.target.closest("[data-close]");
+    if (closeButton && m.contains(closeButton) && !closeButton.disabled) closeModal(m);
   }));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const m = $(".modal:not([hidden])"); if (m && !m.dataset.gate) closeModal(m); } });
   $("#open-disclaimer").addEventListener("click", () => openModal("modal-disclaimer"));
