@@ -281,10 +281,17 @@
       theme: look.theme, accent: look.accent, v: 3,
     };
   }
+  function resizeCustomTextField() {
+    if (!el.customText) return;
+    el.customText.style.height = "auto";
+    el.customText.style.height = Math.max(48, el.customText.scrollHeight) + "px";
+  }
+
   function applySettings(s) {
     el.top.value = s.top; el.bottom.value = s.bottom; el.regions.value = s.regions;
     el.header.value = s.header; el.footer.value = s.footer;
     el.watermark.value = s.watermark; el.customText.value = s.customText || ""; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
+    resizeCustomTextField();
     el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.lite.checked = !!s.lite; applyLite();
     look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "system";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
@@ -321,7 +328,7 @@
     t.addEventListener("input", () => { syncRange(t, r); renderOverlay(); persist(); });
   });
   [el.regions, el.header, el.footer, el.watermark, el.customText, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.lite].forEach((n) =>
-    n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); })
+    n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); if (n === el.customText) resizeCustomTextField(); })
   );
   el.reset.addEventListener("click", () => { applySettings(DEFAULTS); persist(); toast("Settings reset to defaults"); });
 
