@@ -284,9 +284,25 @@ def _strip_image_metadata(doc) -> dict:
         "pdf_metadata_references_removed": 0,
         "jpeg_metadata_segments_removed": 0,
         "jpeg_images_updated": 0,
+        "inline_or_unresolved_image_instances": 0,
         "unsupported_image_xrefs": [],
         "failed_image_xrefs": [],
     }
+
+    # Page image info reports xref=0 for inline images (and any image that
+    # cannot be resolved to a standalone PDF object). These cannot be safely
+    # rewritten as ordinary image XObjects, so count and report them.
+    for page in doc:
+        try:
+            page_images = page.get_image_info(xrefs=True)
+        except Exception:
+            page_images = []
+        for item in page_images:
+            try:
+                if int(item.get("xref") or 0) <= 0:
+                    stats["inline_or_unresolved_image_instances"] += 1
+            except (TypeError, ValueError):
+                stats["inline_or_unresolved_image_instances"] += 1
 
     for xref in range(1, doc.xref_length()):
         try:
@@ -1500,6 +1516,7 @@ def clean_pdf(
             "pdf_metadata_references_removed": 0,
             "jpeg_metadata_segments_removed": 0,
             "jpeg_images_updated": 0,
+            "inline_or_unresolved_image_instances": 0,
             "unsupported_image_xrefs": [],
             "failed_image_xrefs": [],
         }
@@ -1628,6 +1645,8 @@ def clean_pdf(
                 f"stripped {image_metadata_stats['jpeg_metadata_segments_removed']} JPEG EXIF/XMP/IPTC/comment segment(s) "
                 f"from {image_metadata_stats['jpeg_images_updated']} image(s)."
             ),
+            "Inline/unresolved image instances without a standalone XRef (not rewritten): "
+            + str(image_metadata_stats["inline_or_unresolved_image_instances"]),
             "Image streams not safely rewritten (for example JPEG 2000 or chained JPEG filters): "
             + (", ".join(map(str, image_metadata_stats["unsupported_image_xrefs"])) or "None"),
             "Image metadata cleanup errors: "
