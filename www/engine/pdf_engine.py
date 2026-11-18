@@ -32,6 +32,7 @@ class CleanOptions:
     top_percent: float = 0.0
     bottom_percent: float = 0.0
     watermark_phrases: List[str] = None  # type: ignore[assignment]
+    custom_text_phrases: List[str] = None  # type: ignore[assignment]
     header_phrases: List[str] = None  # type: ignore[assignment]
     footer_phrases: List[str] = None  # type: ignore[assignment]
     custom_regions: List[Tuple[float, float, float, float]] = None  # type: ignore[assignment]
@@ -45,6 +46,8 @@ class CleanOptions:
     def __post_init__(self) -> None:
         if self.watermark_phrases is None:
             self.watermark_phrases = []
+        if self.custom_text_phrases is None:
+            self.custom_text_phrases = []
         if self.header_phrases is None:
             self.header_phrases = []
         if self.footer_phrases is None:
@@ -172,6 +175,199 @@ def _collect_image_inventory(doc) -> dict:
         if record["has_mask"]:
             record["mask_mean"] = _soft_mask_mean_opacity(doc, xref)
     return inventory
+
+
+
+def _jpeg_filter_names(kind: str, value: str) -> List[str]:
+    """Return the PDF image stream's filter names in their declared order."""
+    if kind == "name":
+        return [value.lstrip("/")]
+    if kind == "array":
+        return re.findall(r"/([A-Za-z0-9]+)", value)
+    return []
+
+
+def _strip_jpeg_metadata_segments(data: bytes):
+    """Remove JPEG EXIF/XMP/IPTC/comment marker segments without re-encoding pixels.
+
+    Returns (cleaned_bytes, removed_segment_count, valid_jpeg). Malformed or
+    unsupported data is returned unchanged so image content is never guessed at.
+    """
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return data, 0, False
+
+    output = bytearray(data[:2])
+    pos = 2
+    removed = 0
+    saw_eoi = False
+
+    while pos < len(data):
+        marker_start = pos
+        if data[pos] != 0xFF:
+            return data, 0, False
+        while pos < len(data) and data[pos] == 0xFF:
+            pos += 1
+        if pos >= len(data):
+            return data, 0, False
+
+        marker = data[pos]
+        marker_end = pos + 1
+        if marker == 0xD9:  # End of image
+            output.extend(data[marker_start:marker_end])
+            output.extend(data[marker_end:])
+            saw_eoi = True
+            break
+        if marker == 0xD8:  # A nested SOI is invalid here
+            return data, 0, False
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:  # Standalone markers
+            output.extend(data[marker_start:marker_end])
+            pos = marker_end
+            continue
+
+        if marker_end + 2 > len(data):
+            return data, 0, False
+        segment_length = int.from_bytes(data[marker_end:marker_end + 2], "big")
+        if segment_length < 2:
+            return data, 0, False
+        segment_end = marker_end + segment_length
+        if segment_end > len(data):
+            return data, 0, False
+
+        # APP1 carries EXIF/XMP, APP13 commonly carries IPTC/Photoshop data,
+        # and COM carries free-form comments. APP2 ICC profiles are preserved.
+        if marker in (0xE1, 0xED, 0xFE):
+            removed += 1
+        else:
+            output.extend(data[marker_start:segment_end])
+
+        pos = segment_end
+        if marker == 0xDA:  # Start of scan: preserve compressed image data verbatim.
+            entropy_start = pos
+            while pos < len(data):
+                ff = data.find(b"\xff", pos)
+                if ff < 0:
+                    pos = len(data)
+                    break
+                j = ff + 1
+                while j < len(data) and data[j] == 0xFF:
+                    j += 1
+                if j >= len(data):
+                    pos = len(data)
+                    break
+                code = data[j]
+                if code == 0x00 or 0xD0 <= code <= 0xD7:
+                    pos = j + 1  # Stuffed FF byte or restart marker
+                    continue
+                output.extend(data[entropy_start:ff])
+                pos = ff  # Another marker follows (e.g. EOI or another scan)
+                break
+            else:
+                output.extend(data[entropy_start:pos])
+
+            if pos >= len(data):
+                break
+
+    if not saw_eoi:
+        return data, 0, False
+    return bytes(output), removed, True
+
+
+def _strip_image_metadata(doc) -> dict:
+    """Remove PDF image-XObject metadata and safe-to-strip JPEG metadata segments.
+
+    The JPEG scan data is not decoded or re-encoded, so stripping marker segments
+    does not reduce image quality or change its pixels. Formats requiring a
+    different decoder (notably JPEG 2000) are reported instead of being rewritten.
+    """
+    stats = {
+        "image_xrefs_scanned": 0,
+        "pdf_metadata_references_removed": 0,
+        "jpeg_metadata_segments_removed": 0,
+        "jpeg_images_updated": 0,
+        "inline_or_unresolved_image_instances": 0,
+        "unsupported_image_xrefs": [],
+        "failed_image_xrefs": [],
+    }
+
+    # Page image info reports xref=0 for inline images (and any image that
+    # cannot be resolved to a standalone PDF object). These cannot be safely
+    # rewritten as ordinary image XObjects, so count and report them.
+    for page in doc:
+        try:
+            page_images = page.get_image_info(xrefs=True)
+        except Exception:
+            page_images = []
+        for item in page_images:
+            try:
+                if int(item.get("xref") or 0) <= 0:
+                    stats["inline_or_unresolved_image_instances"] += 1
+            except (TypeError, ValueError):
+                stats["inline_or_unresolved_image_instances"] += 1
+
+    for xref in range(1, doc.xref_length()):
+        try:
+            subtype_kind, subtype_value = doc.xref_get_key(xref, "Subtype")
+            if subtype_kind != "name" or subtype_value != "/Image":
+                continue
+            stats["image_xrefs_scanned"] += 1
+        except Exception:
+            continue
+
+        try:
+            metadata_kind, _ = doc.xref_get_key(xref, "Metadata")
+            if metadata_kind != "null":
+                doc.xref_set_key(xref, "Metadata", "null")
+                stats["pdf_metadata_references_removed"] += 1
+        except Exception:
+            stats["failed_image_xrefs"].append(xref)
+
+        try:
+            filter_kind, filter_value = doc.xref_get_key(xref, "Filter")
+            filters = _jpeg_filter_names(filter_kind, filter_value)
+            if "DCTDecode" in filters:
+                # Only a single, direct DCTDecode filter is safe to edit in-place.
+                # Chained filters such as ASCII85Decode + DCTDecode are left intact.
+                if filters != ["DCTDecode"]:
+                    stats["unsupported_image_xrefs"].append(xref)
+                    continue
+                raw_stream = doc.xref_stream_raw(xref)
+                cleaned_stream, removed_count, valid_jpeg = _strip_jpeg_metadata_segments(raw_stream or b"")
+                if not valid_jpeg:
+                    stats["unsupported_image_xrefs"].append(xref)
+                    continue
+                if removed_count:
+                    # update_stream clears the stream's filter entry. Restore the
+                    # original DCTDecode semantics (and any decoder parameters)
+                    # immediately so the image continues to render unchanged.
+                    decode_params_kind, decode_params_value = doc.xref_get_key(xref, "DecodeParms")
+                    try:
+                        doc.update_stream(xref, cleaned_stream, compress=False)
+                        doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                        if decode_params_kind != "null":
+                            doc.xref_set_key(xref, "DecodeParms", decode_params_value)
+                    except Exception:
+                        # Roll back the image stream if its filter declaration could
+                        # not be restored; never leave a partially rewritten image.
+                        try:
+                            doc.update_stream(xref, raw_stream, compress=False)
+                            doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                            if decode_params_kind != "null":
+                                doc.xref_set_key(xref, "DecodeParms", decode_params_value)
+                        except Exception:
+                            pass
+                        raise
+                    stats["jpeg_metadata_segments_removed"] += removed_count
+                    stats["jpeg_images_updated"] += 1
+            elif "JPXDecode" in filters:
+                # JPX/JP2 files can contain XML/UUID metadata boxes. Do not rewrite
+                # their codestream without a format-aware JP2 parser.
+                stats["unsupported_image_xrefs"].append(xref)
+        except Exception:
+            stats["failed_image_xrefs"].append(xref)
+
+    stats["unsupported_image_xrefs"] = sorted(set(stats["unsupported_image_xrefs"]))
+    stats["failed_image_xrefs"] = sorted(set(stats["failed_image_xrefs"]))
+    return stats
 
 
 def _likely_image_watermark_xrefs(inventory: dict) -> List[int]:
@@ -957,7 +1153,7 @@ def preview_cleanup(path, options, password="", status=None):
         raise ValueError("Header/footer bands must cover less than the whole page.")
     doc = open_pdf(path, password)
     text_enabled = bool(options.top_percent or options.bottom_percent or options.custom_regions or
-                        options.watermark_phrases or options.header_phrases or options.footer_phrases or options.remove_hidden_text)
+                        options.watermark_phrases or options.custom_text_phrases or options.header_phrases or options.footer_phrases or options.remove_hidden_text)
     flags = {"text": text_enabled, "annotations": options.remove_annotations, "links": options.remove_links,
              "attachments": True, "metadata": True,
              "hidden": options.remove_hidden_text, "images": bool(options.remove_image_watermarks or options.image_watermark_xrefs)}
@@ -1112,17 +1308,19 @@ def _clean_page_content(page, options):
         [("watermark", phrase, "any") for phrase in options.watermark_phrases]
         + [("header", phrase, "header") for phrase in options.header_phrases]
         + [("footer", phrase, "footer") for phrase in options.footer_phrases]
+        + [("custom", phrase, "any") for phrase in options.custom_text_phrases]
     )
     matched_rects = {}
     skipped_here = set()
     for category, phrase, location in phrase_jobs:
-        for rect, guard_text in phrase_hits(page, phrase, location):
+        hits = _fuzzy_zone_hits(page, phrase, location) if category == "custom" else phrase_hits(page, phrase, location)
+        for rect, guard_text in hits:
             key = tuple(round(value, 2) for value in (rect.x0, rect.y0, rect.x1, rect.y1))
             if _rect_overlaps_other_content(page, rect, guard_text, check_graphics=(category == "watermark")):
                 skip_key = (category, key)
                 if skip_key not in skipped_here:
                     skipped_here.add(skip_key)
-                    if category == "watermark":
+                    if category in ("watermark", "custom"):
                         skipped_watermark_matches += 1
                     elif category == "header":
                         skipped_header_matches += 1
@@ -1264,6 +1462,25 @@ def _save_history_free(doc, destination):
                 raise RuntimeError("The exported PDF still contains document metadata.")
             if check.embfile_count():
                 raise RuntimeError("The exported PDF still contains embedded files.")
+            for image_xref in range(1, check.xref_length()):
+                try:
+                    subtype_kind, subtype_value = check.xref_get_key(image_xref, "Subtype")
+                    if subtype_kind != "name" or subtype_value != "/Image":
+                        continue
+                    if check.xref_get_key(image_xref, "Metadata")[0] != "null":
+                        raise RuntimeError("The exported PDF still contains image-level PDF metadata.")
+                    filter_kind, filter_value = check.xref_get_key(image_xref, "Filter")
+                    if _jpeg_filter_names(filter_kind, filter_value) == ["DCTDecode"]:
+                        raw_stream = check.xref_stream_raw(image_xref)
+                        _, remaining_segments, valid_jpeg = _strip_jpeg_metadata_segments(raw_stream or b"")
+                        if valid_jpeg and remaining_segments:
+                            raise RuntimeError("The exported PDF still contains removable JPEG metadata segments.")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    # The processing report separately lists formats or objects
+                    # that could not be verified without changing their content.
+                    pass
             for xref in range(1, check.xref_length()):
                 for key in set(check.xref_get_keys(xref)) & _HISTORY_KEYS:
                     if check.xref_get_key(xref, key)[0] != "null":
@@ -1313,6 +1530,15 @@ def clean_pdf(
         hidden_removed = 0
         hidden_skipped = 0
         hidden_ocr_kept = 0
+        image_metadata_stats = {
+            "image_xrefs_scanned": 0,
+            "pdf_metadata_references_removed": 0,
+            "jpeg_metadata_segments_removed": 0,
+            "jpeg_images_updated": 0,
+            "inline_or_unresolved_image_instances": 0,
+            "unsupported_image_xrefs": [],
+            "failed_image_xrefs": [],
+        }
 
         # Snapshot visible image placements before changing page streams. Automatic
         # detection only selects large, mostly transparent images; the manual XRef
@@ -1408,6 +1634,9 @@ def clean_pdf(
                 xml_metadata=False,
             )
 
+        say("Removing metadata from embedded image objects...")
+        image_metadata_stats = _strip_image_metadata(doc)
+
         say("Saving optimized output copy...")
         _save_history_free(doc, dst)
         if not dst.is_file() or dst.stat().st_size == 0:
@@ -1417,8 +1646,8 @@ def clean_pdf(
             f"Cleaned copy saved: {dst}",
             f"Pages processed: {page_count}",
             f"Standalone watermark text objects removed directly: {watermark_objects_removed}",
-            f"Watermark text matches removed by safe redaction: {redacted_phrase_matches}",
-            f"Watermark matches skipped to protect overlapping content: {skipped_watermark_matches}",
+            f"Watermark/custom text phrase matches removed by safe redaction: {redacted_phrase_matches}",
+            f"Watermark/custom text matches skipped to protect overlapping content: {skipped_watermark_matches}",
             f"Automatic image-watermark detection: {'On' if options.remove_image_watermarks else 'Off'}",
             f"Image XRefs removed (replaced with transparent placeholders): {', '.join(map(str, removed_image_xrefs)) if removed_image_xrefs else 'None'}",
             f"Image XRefs requested but not found as visible image objects: {', '.join(map(str, missing_image_xrefs)) if missing_image_xrefs else 'None'}",
@@ -1431,6 +1660,18 @@ def clean_pdf(
             f"Hidden/tracker text removed: {hidden_removed if options.remove_hidden_text else 'Off'}"
             + (f" (skipped {hidden_skipped} overlapping visible text; kept {hidden_ocr_kept} OCR-layer span(s))" if options.remove_hidden_text else ""),
             "Metadata removed: Yes (always cleared on export)",
+            (
+                f"Image metadata: inspected {image_metadata_stats['image_xrefs_scanned']} image object(s); "
+                f"removed {image_metadata_stats['pdf_metadata_references_removed']} image-level PDF metadata reference(s); "
+                f"stripped {image_metadata_stats['jpeg_metadata_segments_removed']} JPEG EXIF/XMP/IPTC/comment segment(s) "
+                f"from {image_metadata_stats['jpeg_images_updated']} image(s)."
+            ),
+            "Inline/unresolved image instances without a standalone XRef (not rewritten): "
+            + str(image_metadata_stats["inline_or_unresolved_image_instances"]),
+            "Image streams not safely rewritten (for example JPEG 2000 or chained JPEG filters): "
+            + (", ".join(map(str, image_metadata_stats["unsupported_image_xrefs"])) or "None"),
+            "Image metadata cleanup errors: "
+            + (", ".join(map(str, image_metadata_stats["failed_image_xrefs"])) or "None"),
             "Saved file history: earlier revisions, private editing data and cached thumbnails discarded",
             "Embedded files and document scripts: Removed (may contain older copies)",
             "Document identifiers: Regenerated",
@@ -1463,6 +1704,7 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
     doc = open_pdf(str(src), password)
     try:
         page_count = len(doc)
+        image_metadata_stats = _strip_image_metadata(doc)
         _save_history_free(doc, dst)
     finally:
         doc.close()
@@ -1484,6 +1726,15 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
         f"Unlocked copy saved: {dst}",
         f"Pages preserved: {page_count}",
         "Saved file history, document metadata, embedded files and scripts: Cleared",
+        (
+            f"Image metadata: inspected {image_metadata_stats['image_xrefs_scanned']} image object(s); "
+            f"removed {image_metadata_stats['pdf_metadata_references_removed']} image-level PDF metadata reference(s); "
+            f"stripped {image_metadata_stats['jpeg_metadata_segments_removed']} JPEG EXIF/XMP/IPTC/comment segment(s)."
+        ),
+        "Inline/unresolved image instances not rewritten: "
+        + str(image_metadata_stats["inline_or_unresolved_image_instances"]),
+        "Image XRefs with unsupported formats or cleanup errors: "
+        + (", ".join(map(str, sorted(set(image_metadata_stats["unsupported_image_xrefs"] + image_metadata_stats["failed_image_xrefs"])))) or "None"),
         "Document identifiers: Regenerated",
         (
             "Password protection: Removed (output opens without a password)"
@@ -1657,6 +1908,7 @@ def _options_from_job(o):
         top_percent=float(o.get("top", 0)),
         bottom_percent=float(o.get("bottom", 0)),
         watermark_phrases=parse_phrases(o.get("watermark", "")),
+        custom_text_phrases=parse_phrases(o.get("custom_text", "")),
         header_phrases=parse_phrases(o.get("header", "")),
         footer_phrases=parse_phrases(o.get("footer", "")),
         custom_regions=parse_regions(o.get("regions", "")),

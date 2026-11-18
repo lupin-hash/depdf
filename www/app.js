@@ -14,7 +14,7 @@
   const DEFAULTS = {
     top: "0", bottom: "0", regions: "", v: 3,
     header: "", footer: "",
-    watermark: "", imgWm: true, xrefs: "",
+    watermark: "", customText: "", imgWm: true, xrefs: "",
     meta: true, annots: false, links: false, extras: true, hidden: false,
     theme: "system", accent: 0, lite: LITE_AUTO,
   };
@@ -25,7 +25,7 @@
     app: $("#app"), bar: $("#actionbar"), pill: $("#pill"), pillText: $("#pill-text"),
     fileInput: $("#file-input"), batchInput: $("#batch-input"),
     top: $("#top"), topRange: $("#top-range"), bottom: $("#bottom"), bottomRange: $("#bottom-range"), regions: $("#regions"),
-    header: $("#header-text"), footer: $("#footer-text"), watermark: $("#watermark"), imgWm: $("#img-wm"), xrefs: $("#xrefs"),
+    header: $("#header-text"), footer: $("#footer-text"), watermark: $("#watermark"), customText: $("#custom-text"), imgWm: $("#img-wm"), xrefs: $("#xrefs"),
     meta: $("#opt-meta"), annots: $("#opt-annots"), links: $("#opt-links"), extras: $("#opt-extras"), hidden: $("#opt-hidden"),
     reset: $("#reset-btn"),
     prevCard: $("#card-preview"), stage: $("#stage"), prevImg: $("#prev-img"), overlay: $("#overlay"), stageMsg: $("#stage-msg"),
@@ -275,16 +275,23 @@
     return {
       top: el.top.value, bottom: el.bottom.value, regions: el.regions.value,
       header: el.header.value, footer: el.footer.value,
-      watermark: el.watermark.value, imgWm: el.imgWm.checked, xrefs: el.xrefs.value,
+      watermark: el.watermark.value, customText: el.customText.value, imgWm: el.imgWm.checked, xrefs: el.xrefs.value,
       meta: el.meta.checked, annots: el.annots.checked, links: el.links.checked, extras: el.extras.checked, hidden: el.hidden.checked,
       lite: el.lite.checked,
       theme: look.theme, accent: look.accent, v: 3,
     };
   }
+  function resizeCustomTextField() {
+    if (!el.customText) return;
+    el.customText.style.height = "auto";
+    el.customText.style.height = Math.max(48, el.customText.scrollHeight) + "px";
+  }
+
   function applySettings(s) {
     el.top.value = s.top; el.bottom.value = s.bottom; el.regions.value = s.regions;
     el.header.value = s.header; el.footer.value = s.footer;
-    el.watermark.value = s.watermark; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
+    el.watermark.value = s.watermark; el.customText.value = s.customText || ""; el.imgWm.checked = !!s.imgWm; el.xrefs.value = s.xrefs;
+    resizeCustomTextField();
     el.meta.checked = true; el.annots.checked = !!s.annots; el.links.checked = !!s.links; el.extras.checked = true; el.hidden.checked = !!s.hidden; el.lite.checked = !!s.lite; applyLite();
     look.theme = THEMES.some((t) => t.id === s.theme) ? s.theme : "system";
     look.accent = Number.isInteger(s.accent) ? s.accent : 0;
@@ -320,8 +327,8 @@
     r.addEventListener("input", () => { t.value = String(r.value); syncRange(t, r); renderOverlay(); persist(); });
     t.addEventListener("input", () => { syncRange(t, r); renderOverlay(); persist(); });
   });
-  [el.regions, el.header, el.footer, el.watermark, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.lite].forEach((n) =>
-    n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); })
+  [el.regions, el.header, el.footer, el.watermark, el.customText, el.xrefs, el.imgWm, el.meta, el.annots, el.links, el.extras, el.hidden, el.lite].forEach((n) =>
+    n.addEventListener("input", () => { persist(); if (n === el.regions) renderOverlay(); if (n === el.xrefs) renderXrefChips(); if (n === el.customText) resizeCustomTextField(); })
   );
   el.reset.addEventListener("click", () => { applySettings(DEFAULTS); persist(); toast("Settings reset to defaults"); });
 
@@ -334,7 +341,7 @@
     if (top + bottom >= 100) throw new Error("Top/header and bottom/footer bands together must cover less than 100% of a page.");
     return {
       remove_metadata: true, top, bottom,
-      watermark: el.watermark.value, header: el.header.value, footer: el.footer.value,
+      watermark: el.watermark.value, custom_text: el.customText.value, header: el.header.value, footer: el.footer.value,
       regions: el.regions.value, remove_image_watermarks: el.imgWm.checked, xrefs: el.xrefs.value,
       remove_annotations: el.annots.checked, remove_links: el.links.checked, remove_extras: true,
       remove_hidden_text: el.hidden.checked,
