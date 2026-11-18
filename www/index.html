@@ -389,18 +389,18 @@
     <div class="mhead"><button class="icon-btn" type="button" data-close aria-label="Back"><svg class="ic" style="transform:rotate(90deg)"><use href="#i-chevron"/></svg></button><h2 id="mw-title">Watermarks</h2></div>
     <div class="field">
       <label for="watermark">Text phrases <span class="opt">separate with ;</span></label>
-      <input id="watermark" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="CONFIDENTIAL; DRAFT COPY">
+      <input id="watermark" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
       <p class="hint">Risky overlapping matches are skipped to protect text.</p>
     </div>
     <div class="field">
       <label for="custom-text">Specific text to remove <span class="opt">separate with ; or new lines</span></label>
-      <textarea id="custom-text" rows="1" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Test example 123&#10;Confidential Document"></textarea>
+      <textarea id="custom-text" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       <p class="hint">Matches throughout every page. Spacing, line breaks, punctuation and numbering variations are tolerated. Review Analyze before cleaning.</p>
     </div>
     <label class="switch"><input type="checkbox" id="img-wm" checked><span class="track"></span><span class="txt"><b>Remove image watermarks</b><small>Large, faint images</small></span></label>
     <div class="field">
       <label for="xrefs">Image IDs <span class="opt">optional, use ;</span></label>
-      <input id="xrefs" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. 21; 34">
+      <input id="xrefs" type="text" inputmode="numeric" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
       <p class="hint warn">Use IDs from Analyze. A shared image is removed everywhere.</p>
     </div>
     <button class="btn primary" type="button" data-close>Done</button>
