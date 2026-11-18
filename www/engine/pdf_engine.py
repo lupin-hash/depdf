@@ -1570,7 +1570,7 @@ def clean_pdf(
 
         # Metadata cleanup is separate from page-content redaction.
         if options.remove_metadata:
-            say("Removing standard, XML, and embedded image metadata...")
+            say("Removing standard and XML metadata...")
             try:
                 doc.set_metadata({
                     "title": "", "author": "", "subject": "", "keywords": "",
@@ -1587,7 +1587,6 @@ def clean_pdf(
                     doc.set_xml_metadata("")
                 except Exception:
                     pass
-            image_metadata_stats = _strip_image_metadata(doc)
 
         if options.remove_annotations:
             say("Removing page annotations and stamps...")
@@ -1634,6 +1633,9 @@ def clean_pdf(
                 thumbnails=False,
                 xml_metadata=False,
             )
+
+        say("Removing metadata from embedded image objects...")
+        image_metadata_stats = _strip_image_metadata(doc)
 
         say("Saving optimized output copy...")
         _save_history_free(doc, dst)
@@ -1702,6 +1704,7 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
     doc = open_pdf(str(src), password)
     try:
         page_count = len(doc)
+        image_metadata_stats = _strip_image_metadata(doc)
         _save_history_free(doc, dst)
     finally:
         doc.close()
@@ -1723,6 +1726,15 @@ def unlock_pdf(input_path: str, output_path: str, password: str) -> str:
         f"Unlocked copy saved: {dst}",
         f"Pages preserved: {page_count}",
         "Saved file history, document metadata, embedded files and scripts: Cleared",
+        (
+            f"Image metadata: inspected {image_metadata_stats['image_xrefs_scanned']} image object(s); "
+            f"removed {image_metadata_stats['pdf_metadata_references_removed']} image-level PDF metadata reference(s); "
+            f"stripped {image_metadata_stats['jpeg_metadata_segments_removed']} JPEG EXIF/XMP/IPTC/comment segment(s)."
+        ),
+        "Inline/unresolved image instances not rewritten: "
+        + str(image_metadata_stats["inline_or_unresolved_image_instances"]),
+        "Image XRefs with unsupported formats or cleanup errors: "
+        + (", ".join(map(str, sorted(set(image_metadata_stats["unsupported_image_xrefs"] + image_metadata_stats["failed_image_xrefs"])))) or "None"),
         "Document identifiers: Regenerated",
         (
             "Password protection: Removed (output opens without a password)"
