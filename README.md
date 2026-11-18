@@ -1,8 +1,8 @@
 # DePDF
 
-**A private, on-device workspace for analyzing, cleaning, and unlocking PDF files.**
+**A privacy-focused, on-device workspace for reviewing, organizing, and preparing PDF documents.**
 
-DePDF helps you understand what a PDF contains, remove selected clutter or sensitive information from a copy, and save a fresh PDF that is easier to review, reuse, archive, or share. It is designed for legitimate document preparation and privacy-conscious cleanup by students, researchers, professionals, and everyday users.
+DePDF provides tools to inspect PDF files, make selected adjustments, and export separate copies for personal, educational, and professional document workflows. It is designed to make document review and preparation easier while giving users control over the changes they apply. Available operations depend on the structure of each PDF and the options selected.
 
 PDF processing runs locally on your device using **PyMuPDF** through **Pyodide/WebAssembly**. DePDF does not need to upload your documents to an online PDF-processing service.
 
@@ -12,16 +12,15 @@ PDF processing runs locally on your device using **PyMuPDF** through **Pyodide/W
 
 ## What can I use DePDF for?
 
-DePDF is useful when a PDF contains repeated page elements, draft marks, unnecessary document data, or other material you are authorized to remove. Examples include:
+DePDF can support general document-preparation workflows, including:
 
-- Preparing your own reports, handouts, notes, and research documents for easier reading or sharing.
-- Removing repeated headers, footers, page labels, or text marks from documents you own or are allowed to edit.
-- Cleaning your own drafts and templates by removing text or image watermarks that are no longer needed.
-- Reviewing document properties, annotations, hyperlinks, hidden text, and embedded attachments before sharing a PDF.
-- Creating a cleaner copy for personal study, archiving, or other legitimate document workflows.
-- Opening a password-protected PDF when you know and are authorized to use its correct password.
+- Reviewing PDF content and file information before sharing or archiving.
+- Preparing separate copies of documents you are authorized to edit for study, collaboration, internal use, or recordkeeping.
+- Applying selected page or content adjustments to improve readability and consistency.
+- Reviewing document elements as part of a privacy-conscious document-handling workflow.
+- Opening password-protected PDFs when you have the correct password and are authorized to access them.
 
-DePDF is a **PDF analysis and cleanup tool**. It is not intended to conceal ownership, falsify records, remove another person's rights notices without permission, or bypass PDF security.
+DePDF is a **general-purpose PDF review and preparation tool**. The app does not determine whether a particular change is lawful, permitted by an organization, or appropriate for a specific document. Users are responsible for following applicable laws, policies, confidentiality requirements, copyright, licensing, and document-retention rules.
 
 ---
 
@@ -159,9 +158,9 @@ This describes the app's intended processing design; it is not a promise that ev
 
 ## Disclaimer and responsible use
 
-Use DePDF only on PDF documents that you own or have explicit permission to modify. You are responsible for confirming that you have the legal right to make the changes you request and for respecting copyright, ownership, licensing, privacy, and other applicable rights.
+Use DePDF only with PDF documents that you own or have explicit permission to modify or access. You are responsible for ensuring that your use of the app and the changes you make comply with applicable laws, contracts, institutional policies, confidentiality obligations, copyright, licensing, and document-retention requirements.
 
-Do not use DePDF to remove another person's ownership, authorship, licensing, or attribution notices without authorization; to present another person's work as your own; to alter official, academic, financial, legal, or other records to mislead; or to circumvent protections you are not entitled to bypass. Unlocking requires the correct password and is intended only for documents you are authorized to access.
+Do not use DePDF to misrepresent a document, violate another party's rights, interfere with records that must be preserved, or access materials without authorization. Password-protected documents should only be opened when you have the correct password and are authorized to access them.
 
 Cleaning and unlocking exports may permanently remove text, images, annotations, links, metadata, attachments, scripts, or saved revision data. These changes may be irreversible in the exported copy and may invalidate digital signatures. Keep an untouched backup of the original and verify the output before relying on it, submitting it, publishing it, or sharing it.
 
@@ -323,4 +322,4 @@ Project names and trademarks belong to their respective owners. Each dependency 
 
 ## About this project
 
-DePDF is a document-cleanup utility built around a simple principle: **inspect first, make deliberate changes, then review the exported copy.** It is intended to make legitimate PDF preparation more understandable and more private by keeping PDF processing on the user's device.
+DePDF is an on-device PDF workspace built around a simple principle: **review the document, make deliberate changes, and verify the exported copy.** It supports general document-preparation workflows while keeping PDF processing on the user's device.
