@@ -32,6 +32,7 @@ class CleanOptions:
     top_percent: float = 0.0
     bottom_percent: float = 0.0
     watermark_phrases: List[str] = None  # type: ignore[assignment]
+    custom_text_phrases: List[str] = None  # type: ignore[assignment]
     header_phrases: List[str] = None  # type: ignore[assignment]
     footer_phrases: List[str] = None  # type: ignore[assignment]
     custom_regions: List[Tuple[float, float, float, float]] = None  # type: ignore[assignment]
@@ -45,6 +46,8 @@ class CleanOptions:
     def __post_init__(self) -> None:
         if self.watermark_phrases is None:
             self.watermark_phrases = []
+        if self.custom_text_phrases is None:
+            self.custom_text_phrases = []
         if self.header_phrases is None:
             self.header_phrases = []
         if self.footer_phrases is None:
@@ -957,7 +960,7 @@ def preview_cleanup(path, options, password="", status=None):
         raise ValueError("Header/footer bands must cover less than the whole page.")
     doc = open_pdf(path, password)
     text_enabled = bool(options.top_percent or options.bottom_percent or options.custom_regions or
-                        options.watermark_phrases or options.header_phrases or options.footer_phrases or options.remove_hidden_text)
+                        options.watermark_phrases or options.custom_text_phrases or options.header_phrases or options.footer_phrases or options.remove_hidden_text)
     flags = {"text": text_enabled, "annotations": options.remove_annotations, "links": options.remove_links,
              "attachments": True, "metadata": True,
              "hidden": options.remove_hidden_text, "images": bool(options.remove_image_watermarks or options.image_watermark_xrefs)}
@@ -1112,17 +1115,19 @@ def _clean_page_content(page, options):
         [("watermark", phrase, "any") for phrase in options.watermark_phrases]
         + [("header", phrase, "header") for phrase in options.header_phrases]
         + [("footer", phrase, "footer") for phrase in options.footer_phrases]
+        + [("custom", phrase, "any") for phrase in options.custom_text_phrases]
     )
     matched_rects = {}
     skipped_here = set()
     for category, phrase, location in phrase_jobs:
-        for rect, guard_text in phrase_hits(page, phrase, location):
+        hits = _fuzzy_zone_hits(page, phrase, location) if category == "custom" else phrase_hits(page, phrase, location)
+        for rect, guard_text in hits:
             key = tuple(round(value, 2) for value in (rect.x0, rect.y0, rect.x1, rect.y1))
             if _rect_overlaps_other_content(page, rect, guard_text, check_graphics=(category == "watermark")):
                 skip_key = (category, key)
                 if skip_key not in skipped_here:
                     skipped_here.add(skip_key)
-                    if category == "watermark":
+                    if category in ("watermark", "custom"):
                         skipped_watermark_matches += 1
                     elif category == "header":
                         skipped_header_matches += 1
@@ -1657,6 +1662,7 @@ def _options_from_job(o):
         top_percent=float(o.get("top", 0)),
         bottom_percent=float(o.get("bottom", 0)),
         watermark_phrases=parse_phrases(o.get("watermark", "")),
+        custom_text_phrases=parse_phrases(o.get("custom_text", "")),
         header_phrases=parse_phrases(o.get("header", "")),
         footer_phrases=parse_phrases(o.get("footer", "")),
         custom_regions=parse_regions(o.get("regions", "")),
