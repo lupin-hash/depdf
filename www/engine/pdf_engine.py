@@ -336,7 +336,26 @@ def _strip_image_metadata(doc) -> dict:
                     stats["unsupported_image_xrefs"].append(xref)
                     continue
                 if removed_count:
-                    doc.update_stream(xref, cleaned_stream, compress=False)
+                    # update_stream clears the stream's filter entry. Restore the
+                    # original DCTDecode semantics (and any decoder parameters)
+                    # immediately so the image continues to render unchanged.
+                    decode_params_kind, decode_params_value = doc.xref_get_key(xref, "DecodeParms")
+                    try:
+                        doc.update_stream(xref, cleaned_stream, compress=False)
+                        doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                        if decode_params_kind != "null":
+                            doc.xref_set_key(xref, "DecodeParms", decode_params_value)
+                    except Exception:
+                        # Roll back the image stream if its filter declaration could
+                        # not be restored; never leave a partially rewritten image.
+                        try:
+                            doc.update_stream(xref, raw_stream, compress=False)
+                            doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                            if decode_params_kind != "null":
+                                doc.xref_set_key(xref, "DecodeParms", decode_params_value)
+                        except Exception:
+                            pass
+                        raise
                     stats["jpeg_metadata_segments_removed"] += removed_count
                     stats["jpeg_images_updated"] += 1
             elif "JPXDecode" in filters:
