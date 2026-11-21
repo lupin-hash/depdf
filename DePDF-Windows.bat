@@ -108,9 +108,10 @@ function Open-App([string]$url) {
     if ($appExe) { Start-Process -FilePath $appExe -ArgumentList "--app=$url" } else { Start-Process $url }
 }
 
-# Ask GitHub for the newest commit on the repository's default branch.
-# Returns '' when offline, rate-limited, or GitHub cannot be reached.
-function Get-LatestVersion([string]$apiUrl) {
+# Ask GitHub for the newest published DePDF app release.
+# Ignore launcher-only tags such as windows-v1.0 and choose the highest vMAJOR.MINOR.PATCH.
+# Returns a release object, or $null when GitHub cannot be reached.
+function Get-LatestRelease([string]$apiUrl, [string]$repo) {
     try {
         $r = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -ErrorAction Stop -Headers @{
             'Accept' = 'application/vnd.github+json'
@@ -118,13 +119,30 @@ function Get-LatestVersion([string]$apiUrl) {
             'X-GitHub-Api-Version' = '2022-11-28'
         }
 
-        $first = @($r) | Select-Object -First 1
-        $v = [string]$first.sha
-        $v = $v.Trim().ToLowerInvariant()
+        $valid = @()
+        foreach ($release in @($r)) {
+            $tag = ([string]$release.tag_name).Trim()
+            if ($release.draft -or $release.prerelease) { continue }
+            if ($tag -notmatch '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') { continue }
 
-        if ($v -match '^[0-9a-f]{40}$') { return $v }
+            try {
+                $version = [version]($tag -replace '^[vV]', '')
+            } catch {
+                continue
+            }
+
+            $valid += [pscustomobject]@{
+                Tag = $tag
+                Version = $version
+                ZipUrl = ('https://github.com/' + $repo + '/archive/refs/tags/' + $tag + '.zip')
+            }
+        }
+
+        if ($valid.Count -gt 0) {
+            return ($valid | Sort-Object -Property Version -Descending | Select-Object -First 1)
+        }
     } catch { }
-    return ''
+    return $null
 }
 
 # Download and validate the app before replacing the current copy.
@@ -282,7 +300,7 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     $repo   = 'lupin-hash/depdf'
-    $apiUrl = 'https://api.github.com/repos/' + $repo + '/commits?per_page=1'
+    $apiUrl = 'https://api.github.com/repos/' + $repo + '/releases?per_page=30'
     $root   = Get-InstallRoot
     $www    = Join-Path $root 'www'
     $verFile = Join-Path $root 'version.txt'
@@ -292,36 +310,40 @@ try {
     Write-Host ('DePDF is stored in: ' + $root) -ForegroundColor Green
     Write-Host ('(To choose a different folder, delete ' + $cfgFile + ' and start DePDF again.)') -ForegroundColor DarkGray
 
-    # ---- Every launch: ask GitHub if the repo has a newer version. Download only when it changed. ----
-    # The commits endpoint returns the newest commit from the repository's default branch.
-    # If GitHub is unavailable, an existing installation is kept and used as-is.
+    # ---- Every launch: compare the installed release tag with the latest published app release. ----
+    # Release tags (for example v1.0.21) are the authoritative app versions.
+    # Launcher-only releases are ignored, and old SHA-based version.txt files are upgraded once.
     $have = Test-Path -LiteralPath (Join-Path $www 'index.html') -PathType Leaf
     $localVer = ''
     if (Test-Path -LiteralPath $verFile -PathType Leaf) {
-        $localVer = ([IO.File]::ReadAllText($verFile)).Trim().ToLowerInvariant()
+        $localVer = ([IO.File]::ReadAllText($verFile)).Trim()
     }
-    $remoteVer = Get-LatestVersion $apiUrl
+    $latestRelease = Get-LatestRelease $apiUrl $repo
+    $remoteVer = ''
+    if ($latestRelease) { $remoteVer = [string]$latestRelease.Tag }
 
-    if (-not $remoteVer) {
+    if (-not $latestRelease) {
         Write-Host ''
-        Write-Host 'Could not verify the latest version from GitHub.' -ForegroundColor Yellow
+        Write-Host 'Could not verify the latest DePDF release from GitHub.' -ForegroundColor Yellow
         if ($have) {
             Write-Host 'Your existing DePDF installation will be used. Update checking will retry next time.' -ForegroundColor DarkGray
         }
     }
 
-    $needDownload = (-not $have) -or ($remoteVer -ne '' -and $remoteVer -ne $localVer)
+    $needDownload = (-not $have) -or ($latestRelease -and $remoteVer -ne $localVer)
 
     if ($needDownload) {
         Write-Host ''
         if ($have) {
-            Write-Host 'A new version of DePDF is available. Updating, please wait...' -ForegroundColor Cyan
+            Write-Host ('Updating DePDF to ' + $remoteVer + '...') -ForegroundColor Cyan
         } else {
-            Write-Host 'DePDF is not installed in the selected folder. Downloading, please wait...' -ForegroundColor Cyan
+            $installLabel = 'from GitHub'
+            if ($remoteVer) { $installLabel = $remoteVer }
+            Write-Host ('Installing DePDF ' + $installLabel + '...') -ForegroundColor Cyan
         }
 
-        if ($remoteVer -ne '') {
-            $zipUrl = 'https://github.com/' + $repo + '/archive/' + $remoteVer + '.zip'
+        if ($latestRelease) {
+            $zipUrl = [string]$latestRelease.ZipUrl
         } else {
             # First installation can still proceed when the GitHub API is unavailable.
             $zipUrl = 'https://github.com/' + $repo + '/archive/HEAD.zip'
@@ -329,14 +351,14 @@ try {
 
         try {
             Install-App $zipUrl $root $www
-            if ($remoteVer -ne '') {
+            if ($latestRelease) {
                 [IO.File]::WriteAllText($verFile, $remoteVer)
             } elseif (Test-Path -LiteralPath $verFile) {
                 Remove-Item -LiteralPath $verFile -Force -ErrorAction SilentlyContinue
             }
 
             if ($have) {
-                Write-Host 'Update installed successfully.' -ForegroundColor Green
+                Write-Host ('Update to ' + $remoteVer + ' installed successfully.') -ForegroundColor Green
             } else {
                 Write-Host 'DePDF downloaded and installed successfully.' -ForegroundColor Green
             }
@@ -349,15 +371,18 @@ try {
         }
     }
 
-    # ---- Show the build currently installed, and compare it with GitHub's latest build ----
+    # ---- Show the installed app release version, not a misleading short commit hash. ----
     $installedVer = ''
     if (Test-Path -LiteralPath $verFile -PathType Leaf) {
-        $installedVer = ([IO.File]::ReadAllText($verFile)).Trim().ToLowerInvariant()
+        $installedVer = ([IO.File]::ReadAllText($verFile)).Trim()
     }
 
     $installedLabel = 'Unknown (version could not be recorded)'
-    if ($installedVer -match '^[0-9a-f]{40}$') {
-        $installedLabel = $installedVer.Substring(0, 7)
+    if ($installedVer -match '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') {
+        if ($installedVer -notmatch '^[vV]') { $installedVer = 'v' + $installedVer }
+        $installedLabel = $installedVer
+    } elseif ($installedVer -match '^[0-9a-fA-F]{40}$') {
+        $installedLabel = 'Legacy build (' + $installedVer.Substring(0, 7) + ')'
     } elseif ($installedVer) {
         $installedLabel = $installedVer
     } elseif (-not (Test-Path -LiteralPath (Join-Path $www 'index.html') -PathType Leaf)) {
@@ -365,19 +390,18 @@ try {
     }
 
     Write-Host ''
-    Write-Host ('Installed build: ' + $installedLabel) -ForegroundColor Green
+    Write-Host ('Installed version: ' + $installedLabel) -ForegroundColor Green
 
-    if ($remoteVer -match '^[0-9a-f]{40}$') {
-        $latestLabel = $remoteVer.Substring(0, 7)
-        Write-Host ('Latest GitHub build: ' + $latestLabel) -ForegroundColor Cyan
+    if ($latestRelease) {
+        Write-Host ('Latest GitHub version: ' + $remoteVer) -ForegroundColor Cyan
 
         if ($installedVer -eq $remoteVer) {
             Write-Host 'Status: DePDF is up to date.' -ForegroundColor Green
         } elseif (Test-Path -LiteralPath (Join-Path $www 'index.html') -PathType Leaf) {
-            Write-Host 'Status: The installed build is different from the latest GitHub build.' -ForegroundColor Yellow
+            Write-Host 'Status: The installed version is different from the latest GitHub release.' -ForegroundColor Yellow
         }
     } else {
-        Write-Host 'Latest GitHub build: Unavailable' -ForegroundColor Yellow
+        Write-Host 'Latest GitHub version: Unavailable' -ForegroundColor Yellow
         Write-Host 'Status: The installed build will be used; update status could not be verified.' -ForegroundColor DarkGray
     }
 
