@@ -1335,9 +1335,11 @@ def _clean_page_content(page, options):
     page_watermark_matches = 0
     page_header_matches = 0
     page_footer_matches = 0
+    # Phrase matches remove text only. Keep the redaction transparent so the
+    # page background and any artwork beneath the text remain visible.
     for rect, categories in matched_rects.values():
         try:
-            page.add_redact_annot(rect, fill=(1, 1, 1) if (categories - {"header", "footer"}) else False, cross_out=False)
+            page.add_redact_annot(rect, fill=False, cross_out=False)
             phrase_matches_on_page += 1
             if "watermark" in categories:
                 page_watermark_matches += 1
