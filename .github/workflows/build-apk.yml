@@ -145,3 +145,10 @@ jobs:
               gh release edit "$RELEASE_TAG" --draft=false
             fi
           fi
+
+      # Keep the fixed Windows-launcher download in sync with the script on main.
+      - name: Refresh the Windows launcher download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload windows-v1.0 DePDF-Windows.bat --clobber
