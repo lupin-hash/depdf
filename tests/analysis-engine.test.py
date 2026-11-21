@@ -97,6 +97,38 @@ class AnalysisPreviewTests(unittest.TestCase):
         self.assertIn('Header words', details['text']['items'][0]['text'])
         self.assert_cleaned(options, ['Header words'], ['Body remains visible'])
 
+    def test_custom_phrase_removal_preserves_rotated_text_background(self):
+        doc = fitz.open()
+        page = doc.new_page(width=320, height=500)
+        page.draw_rect(page.rect, color=(0.05, 0.05, 0.05), fill=(0.05, 0.05, 0.05))
+        for offset in range(-500, 600, 35):
+            page.draw_line((offset, 0), (offset + 500, 500), color=(0.14, 0.14, 0.14), width=0.7)
+            page.draw_line((offset, 500), (offset + 500, 0), color=(0.14, 0.14, 0.14), width=0.7)
+        background = page.get_pixmap(alpha=False)
+        page.insert_text((305, 150), 'REMOVE THIS', fontsize=20, color=(1, 1, 1), rotate=90)
+        target = page.search_for('REMOVE THIS')[0]
+        doc.save(self.input)
+        doc.close()
+
+        options = self.options(custom_text_phrases=['REMOVE THIS'])
+        engine.clean_pdf(str(self.input), str(self.output), options)
+        with fitz.open(self.output) as cleaned:
+            self.assertNotIn('REMOVE THIS', cleaned[0].get_text())
+            result = cleaned[0].get_pixmap(alpha=False)
+
+        x0 = max(0, int(target.x0))
+        y0 = max(0, int(target.y0))
+        x1 = min(background.width, int(target.x1) + 1)
+        y1 = min(background.height, int(target.y1) + 1)
+
+        def crop(pix):
+            return b''.join(
+                pix.samples[row * pix.stride + x0 * pix.n:row * pix.stride + x1 * pix.n]
+                for row in range(y0, y1)
+            )
+
+        self.assertEqual(crop(background), crop(result))
+
     def test_hidden_text_is_shown_and_actual_removals_match(self):
         self.fixture(hidden=True)
         options = self.options(remove_hidden_text=True)
