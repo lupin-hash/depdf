@@ -123,7 +123,7 @@ function Get-LatestRelease([string]$apiUrl, [string]$repo) {
         foreach ($release in @($r)) {
             $tag = ([string]$release.tag_name).Trim()
             if ($release.draft -or $release.prerelease) { continue }
-            if ($tag -notmatch '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') { continue }
+            if ($tag -notmatch '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { continue }
 
             try {
                 $version = [version]($tag -replace '^[vV]', '')
@@ -378,7 +378,7 @@ try {
     }
 
     $installedLabel = 'Unknown (version could not be recorded)'
-    if ($installedVer -match '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') {
+    if ($installedVer -match '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
         if ($installedVer -notmatch '^[vV]') { $installedVer = 'v' + $installedVer }
         $installedLabel = $installedVer
     } elseif ($installedVer -match '^[0-9a-fA-F]{40}$') {
