@@ -359,7 +359,7 @@ try {
     $installedLabel = 'Unknown (version could not be recorded)'
     if ($installedVer -match '^[0-9a-f]{40}$') {
         $installedLabel = $installedVer.Substring(0, 12)
-    } elseif ($installedVer -match '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$') {
+    } elseif ($installedVer -match '^v?(0|[1-9]\d*)\\.(0|[1-9]\d*)\\.(0|[1-9]\d*)$') {
         $installedLabel = 'Legacy release ' + $installedVer + ' (will update from main)'
     } elseif ($installedVer) {
         $installedLabel = $installedVer
